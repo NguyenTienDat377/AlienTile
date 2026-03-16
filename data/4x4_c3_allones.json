@@ -1,0 +1,32 @@
+{
+    "name": "4x4_c3_allones",
+    "description": "4×4 grid, 3 colours, all-ones target",
+    "N": 4,
+    "c": 3,
+    "target": [
+        [
+            1,
+            1,
+            1,
+            1
+        ],
+        [
+            1,
+            1,
+            1,
+            1
+        ],
+        [
+            1,
+            1,
+            1,
+            1
+        ],
+        [
+            1,
+            1,
+            1,
+            1
+        ]
+    ]
+}

@@ -1,0 +1,23 @@
+{
+    "name": "3x3_c2_allones",
+    "description": "3×3 grid, 2 colours (Lights Out variant), target = all ones",
+    "N": 3,
+    "c": 2,
+    "target": [
+        [
+            1,
+            1,
+            1
+        ],
+        [
+            1,
+            1,
+            1
+        ],
+        [
+            1,
+            1,
+            1
+        ]
+    ]
+}
