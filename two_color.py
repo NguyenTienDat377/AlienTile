@@ -1,17 +1,3 @@
-"""
-SAT-Based Optimisation for the Alien Tiles Problem (c = 2).
-
-Implements the three approaches from Section 7 of the problem description:
-  7.1  Non-incremental SAT  (binary search + linear search top-down)
-  7.2  Incremental SAT      (assumption-based bound control with totalizer)
-  7.3  MaxSAT / PBO         (partial weighted MaxSAT)
-
-For c = 2 the click variables x_{i,j} are already Boolean and the
-feasibility constraints are XOR clauses.  The unit-contribution literals
-u_{i,j,v} collapse to u_{i,j,1} = x_{i,j}, so the objective is simply
-    min  sum  x_{i,j}.
-"""
-
 import json
 import sys
 import time
@@ -23,7 +9,6 @@ from pysat.card import CardEnc, EncType
 from pysat.examples.rc2 import RC2
 
 def load_instance(path: str):
-    """Load an Alien Tiles instance from a JSON file."""
     with open(path) as f:
         data = json.load(f)
     N = data["N"]
@@ -40,7 +25,6 @@ def print_board(board, title="Board"):
 
 
 def print_solution(model, N, click_var):
-    """Print the click matrix decoded from a SAT model."""
     total = 0
     print("Click matrix:")
     for i in range(N):
@@ -63,47 +47,11 @@ def var_id(i, j, N):
 
 
 def build_xor_model(N, target):
-    """
-    Build the XOR feasibility formula F for c = 2.
-
-    For each cell (r, k) the effect equation (Section 2, eq. 1) mod 2 is:
-        XOR of { x_{r,j} for j in 0..N-1 }
-              ∪ { x_{i,k} for i in 0..N-1 }
-              minus one copy of x_{r,k}        (counted twice)
-        = t_{r,k}
-
-    Because x_{r,k} appears in both the row-sum and column-sum, it is
-    counted twice.  Two XORs of the same variable cancel, so x_{r,k}
-    drops out of the XOR and the constraint becomes:
-        XOR of { x_{r,j} : j ≠ k } ∪ { x_{i,k} : i ≠ r } = t_{r,k}
-
-    But in mod-2 arithmetic, the paper's formula
-        (sum_j x_{r,j} + sum_i x_{i,k} - x_{r,k}) mod 2 = t_{r,k}
-    is equivalent to XOR of all row-mates and column-mates (each once),
-    with x_{r,k} appearing once (odd count).  Expanding:
-        XOR( x_{r,0}, ..., x_{r,N-1}, x_{0,k}, ..., x_{N-1,k} ) XOR x_{r,k} = t_{r,k}
-    since x_{r,k} appears twice (once in row, once in col) → cancels,
-    leaving all other row/col mates plus nothing for x_{r,k}.
-
-    Actually for the Lights Out variant (cross-shaped neighbourhood) the
-    existing code is correct — neighbours are the 4-adjacent cells plus the
-    cell itself.  But the Alien Tiles problem has a DIFFERENT neighbourhood:
-    clicking (i,j) affects every cell sharing row i OR column j.
-
-    We use the Alien Tiles definition from the PDF.
-    """
     solver = CryptoSolver()
 
     def vv(i, j):
         return var_id(i, j, N)
 
-    # Start state is all-zero.  For each cell (r, k):
-    # (sum_j x_{r,j} + sum_i x_{i,k} - x_{r,k}) mod 2 = t_{r,k}
-    # In XOR terms: XOR of {x_{r,j} for all j} XOR {x_{i,k} for all i} XOR x_{r,k} = t_{r,k}
-    # because x_{r,k} appears in both sums (counted twice → cancels in XOR),
-    # then we XOR it back once.  Equivalently the set of variables is:
-    #   { x_{r,j} : j ≠ k } ∪ { x_{i,k} : i ≠ r } ∪ { x_{r,k} }
-    # which is just { x_{r,j} : all j } ∪ { x_{i,k} : i ≠ r }.
     for r in range(N):
         for k in range(N):
             xor_vars = []
@@ -122,13 +70,8 @@ def build_xor_model(N, target):
     return solver, click_vars
 
 
-# ── Sequential counter for AtMost-K  (Section 7.1) ─────────────────────
 
 def add_atmost_k(solver, variables, K):
-    """
-    Encode AtMost(variables, K) using a sequential counter.
-    O(n·K) auxiliary variables and clauses.
-    """
     n = len(variables)
     if K >= n:
         return
@@ -168,12 +111,6 @@ def add_atmost_k(solver, variables, K):
 # ── XOR feasibility as CNF clauses (for pysat) ─────────────────────────
 
 def xor_to_cnf_clauses(variables, rhs):
-    """
-    Convert  XOR(variables) = rhs  into a list of CNF clauses.
-
-    For n variables the XOR constraint produces 2^{n-1} clauses,
-    each of length n (one clause per odd/even parity assignment).
-    """
     n = len(variables)
     clauses = []
     for mask in range(1 << n):
@@ -518,7 +455,8 @@ def approach_73_maxsat(N, target):
     rc2.delete()
     return opt
 
-
+def get_click_from_crypto(model, click_vars):
+        return {v for v in click_vars if v < len(model) and model[v]}
 # ══════════════════════════════════════════════════════════════════════════
 #  Main
 # ══════════════════════════════════════════════════════════════════════════

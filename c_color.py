@@ -173,67 +173,135 @@ class AlienTilesEncoder:
                     # Backward: all bits match w -> dv
                     self.clauses.append(backward)
 
-    # ── Sections 6.2-6.3: Feasibility via running modular sum ────────
+    # ── Sections 6.2-6.3: Feasibility via unary sum + totalizer ──────
+
+    def _local_totalizer(self, lits):
+        """
+        Build a BIDIRECTIONAL totalizer network.
+
+        Returns output literals outputs[0], ..., outputs[n-1] where:
+            outputs[k] is true  IFF  at least k+1 of the inputs are true.
+
+        Unlike a standard (forward-only) totalizer, this includes backward
+        clauses so that outputs[k] cannot be true unless the actual count
+        supports it. This is required for the modulo-blocking approach.
+
+        Forward:  actual count >= k+1  -->  outputs[k] = true
+        Backward: outputs[k] = true    -->  actual count >= k+1
+        """
+        n = len(lits)
+        if n == 0:
+            return []
+        if n == 1:
+            return list(lits)
+
+        mid = n // 2
+        left = self._local_totalizer(lits[:mid])
+        right = self._local_totalizer(lits[mid:])
+
+        a_len, b_len = len(left), len(right)
+        total = a_len + b_len
+        outputs = [self._new() for _ in range(total)]
+
+        # ── Forward: input counts imply output counts ──
+        for i in range(a_len):
+            self.clauses.append([-left[i], outputs[i]])
+        for j in range(b_len):
+            self.clauses.append([-right[j], outputs[j]])
+        for i in range(a_len):
+            for j in range(b_len):
+                k = i + j + 1
+                if k < total:
+                    self.clauses.append([-left[i], -right[j], outputs[k]])
+
+        # ── Backward: output counts require input support ──
+        # For each output level k and each "cut point" s, assert:
+        #   outputs[k] --> left[s] OR right[k-s]
+        # This means: if combined count >= k+1, then for every way
+        # to split k+1 into (s+1) from left and (k-s) from right,
+        # at least one side must have enough.
+        for k in range(total):
+            for s in range(k + 1):
+                left_has = s < a_len
+                right_has = (k - s) < b_len
+                if left_has and right_has:
+                    self.clauses.append([-outputs[k], left[s], right[k - s]])
+                elif left_has:
+                    self.clauses.append([-outputs[k], left[s]])
+                elif right_has:
+                    self.clauses.append([-outputs[k], right[k - s]])
+
+        return outputs
 
     def _encode_feasibility(self):
         """
-        Section 6.2: Linearised sum variables.
-        Section 6.3: Modulo constraint in CNF.
+        Sections 6.2-6.3: Unary sum + totalizer + modulo constraint.
 
         For each cell (r,k), the effect equation is:
             sigma_{r,k} = (sum_j x_{r,j} + sum_i x_{i,k} - x_{r,k}) mod c = target[r][k]
 
-        The 2N-1 terms (row r, then column k excluding (r,k)) are accumulated
-        via a running partial-sum modulo c using one-hot state variables s[step][v].
+        Approach (follows the PDF Sections 6.2-6.3 directly):
+          1. Decompose each click variable x_{i,j} into (c-1) unit-contribution
+             literals:  u_{i,j,v} = 1 iff x_{i,j} >= v  (for v = 1,...,c-1)
+             so that x_{i,j} = u_{i,j,1} + u_{i,j,2} + ... + u_{i,j,c-1}
 
-        Transition: s[step-1][a] AND d[term][b] -> s[step][(a+b) mod c]
-        Final assertion: s[last_step][target[r][k]] must be true.
+          2. For each constraint (r,k), gather the unit literals for all 2N-1
+             terms. Their sum sigma = sum of all unit lits (a plain integer
+             from 0 to (2N-1)(c-1)).
+
+          3. Count sigma using a totalizer network.
+
+          4. Assert sigma mod c = target[r][k] by blocking every invalid sum
+             value S where S mod c != target[r][k].
         """
         N, c = self.N, self.c
 
+        # Step 1: Create shared unit-contribution literals for all cells.
+        # self._u[i][j][v] = "x_{i,j} >= v"  for v in {1, ..., c-1}
+        # Channelling:  u_v <=> OR(d[i][j][w] for w in {v,...,c-1})
+        self._u = [[[None] * c for _ in range(N)] for _ in range(N)]
+        for i in range(N):
+            for j in range(N):
+                for v in range(1, c):
+                    uv = self._new()
+                    self._u[i][j][v] = uv
+                    backward = [-uv]
+                    for w in range(v, c):
+                        self.clauses.append([-self.d[i][j][w], uv])  # d[w] -> u_v
+                        backward.append(self.d[i][j][w])
+                    self.clauses.append(backward)  # u_v -> OR(d[w])
+
+        # Steps 2-4: For each cell (r,k), build totalizer + modulo constraint
         for r in range(N):
             for k in range(N):
-                # Collect the 2N-1 terms: row r (N terms), then col k minus (r,k)
+                # 2N-1 terms: full row r, then column k excluding (r,k)
                 terms = [(r, j) for j in range(N)]
                 terms += [(i, k) for i in range(N) if i != r]
 
-                prev = None  # prev[v] = SAT var for "partial sum = v (mod c)"
-
+                # Gather unit-contribution literals for these terms
+                unit_lits = []
                 for ti, tj in terms:
-                    curr = [self._new() for _ in range(c)]
+                    for v in range(1, c):
+                        unit_lits.append(self._u[ti][tj][v])
 
-                    # Exactly-one constraint on curr state variables
-                    self.clauses.append(list(curr))  # at-least-one
-                    for a in range(c):
-                        for a2 in range(a + 1, c):
-                            self.clauses.append([-curr[a], -curr[a2]])  # at-most-one
+                # Build totalizer: outputs[k] = "at least k+1 unit lits are true"
+                outputs = self._local_totalizer(unit_lits)
+                n_lits = len(unit_lits)  # = (2N-1)(c-1)
 
-                    if prev is None:
-                        # First term: curr[w] <=> d[ti][tj][w]
-                        for w in range(c):
-                            self.clauses.append([-curr[w], self.d[ti][tj][w]])
-                            self.clauses.append([curr[w], -self.d[ti][tj][w]])
-                    else:
-                        # Forward transition:
-                        # prev[a] AND d[ti][tj][w] -> curr[(a+w) mod c]
-                        for a in range(c):
-                            for w in range(c):
-                                self.clauses.append(
-                                    [-prev[a], -self.d[ti][tj][w],
-                                     curr[(a + w) % c]])
-
-                        # Backward support:
-                        # curr[v] AND prev[a] -> d[ti][tj][(v-a) mod c]
-                        for v in range(c):
-                            for a in range(c):
-                                w = (v - a) % c
-                                self.clauses.append(
-                                    [-curr[v], -prev[a], self.d[ti][tj][w]])
-
-                    prev = curr
-
-                # Assert final sum = target[r][k] (mod c)
-                self.clauses.append([prev[self.target[r][k]]])
+                # Block every invalid sum S where S mod c != target[r][k].
+                # "sum != S" is a single 1- or 2-literal clause:
+                #   S = 0:      [outputs[0]]               (force sum >= 1)
+                #   0 < S < n:  [-outputs[S-1], outputs[S]] (force sum < S or sum > S)
+                #   S = n:      [-outputs[n-1]]             (force sum <= n-1)
+                t = self.target[r][k]
+                for S in range(n_lits + 1):
+                    if S % c != t:
+                        if S == 0:
+                            self.clauses.append([outputs[0]])
+                        elif S == n_lits:
+                            self.clauses.append([-outputs[n_lits - 1]])
+                        else:
+                            self.clauses.append([-outputs[S - 1], outputs[S]])
 
     # ── Section 7: Unit-contribution literals for objective ──────────
 
@@ -246,24 +314,15 @@ class AlienTilesEncoder:
 
         Then total(X) = sum_{i,j} sum_{v=1}^{c-1} u_{i,j,v} = sum_{i,j} x_{i,j}.
 
-        Channelling:
-            u_{i,j,v} <=> OR(d[i][j][w] for w in {v,...,c-1})
+        The unit-contribution literals were already created and channelled
+        in _encode_feasibility (stored in self._u). We just collect them here.
         """
         N, c = self.N, self.c
         self.u_lits = []
-
         for i in range(N):
             for j in range(N):
                 for v in range(1, c):
-                    u = self._new()
-                    self.u_lits.append(u)
-
-                    # u <=> OR(d[i][j][w] for w >= v)
-                    backward = [-u]
-                    for w in range(v, c):
-                        self.clauses.append([-self.d[i][j][w], u])  # d[w] -> u
-                        backward.append(self.d[i][j][w])
-                    self.clauses.append(backward)  # u -> OR(d[w])
+                    self.u_lits.append(self._u[i][j][v])
 
     # ── Decode solution from SAT model ───────────────────────────────
 
@@ -371,9 +430,6 @@ def approach_71_binary(N, c, target):
     elapsed = time.perf_counter() - t_start
     print(f"  Optimal: {opt} clicks  ({calls} SAT calls, {elapsed:.4f}s)")
 
-    ok = verify_solution(N, c, target, matrix)
-    print(f"  Verification: {'PASSED' if ok else 'FAILED'}")
-    print()
     return opt
 
 

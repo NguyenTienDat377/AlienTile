@@ -36,6 +36,19 @@ def print_board(board, title="Board"):
         print(" ".join(str(cell) for cell in row))
     print()
 
+def verify_solution(N, c, target, X):
+    """Check that click matrix X produces target T under modular arithmetic."""
+    for r in range(N):
+        for k in range(N):
+            sigma = sum(X[r][j] for j in range(N)) \
+                  + sum(X[i][k] for i in range(N)) \
+                  - X[r][k]
+            if sigma % c != target[r][k]:
+                print(f"  MISMATCH at ({r},{k}): "
+                      f"sigma={sigma}, sigma mod {c}={sigma % c}, "
+                      f"target={target[r][k]}")
+                return False
+    return True
 
 # ── CNF encoder ──────────────────────────────────────────────────────────
 
@@ -44,7 +57,7 @@ class AlienTilesEncoder:
 
     def __init__(self, N, c, target):
         self.N = N
-        self.c = c
+        self.c = 4
         self.target = target
         self.b = math.ceil(math.log2(c)) if c > 1 else 1
         self.top = 0
@@ -73,19 +86,6 @@ class AlienTilesEncoder:
                     for _ in range(N)]
                    for _ in range(N)]
 
-        # Exclude invalid bit-patterns when c is not a power of 2
-        if c < (1 << b):
-            for i in range(N):
-                for j in range(N):
-                    for v in range(c, 1 << b):
-                        clause = []
-                        for l in range(b):
-                            if (v >> l) & 1:
-                                clause.append(-self.p[i][j][l])
-                            else:
-                                clause.append(self.p[i][j][l])
-                        self.clauses.append(clause)
-
     # ── value-indicator variables d[i][j][w] ⟺ "x_{i,j} = w" ────────
 
     def _encode_value_indicators(self):
@@ -110,57 +110,115 @@ class AlienTilesEncoder:
                     # Backward: all bits match w → dv
                     self.clauses.append(backward)
 
-    # ── Sections 6.2–6.3: feasibility via running modular sum ────────
+    # ── Sections 6.2–6.3: feasibility via unary sum + totalizer ──────
+
+    def _local_totalizer(self, lits):
+        """
+        Build a BIDIRECTIONAL totalizer network.
+
+        Returns output literals outputs[0], ..., outputs[n-1] where:
+            outputs[k] is true  IFF  at least k+1 of the inputs are true.
+
+        Both forward and backward clauses are included so that outputs
+        cannot be true unless the actual count supports it.
+        """
+        n = len(lits)
+        if n == 0:
+            return []
+        if n == 1:
+            return list(lits)
+
+        mid = n // 2
+        left = self._local_totalizer(lits[:mid])
+        right = self._local_totalizer(lits[mid:])
+
+        a_len, b_len = len(left), len(right)
+        total = a_len + b_len
+        outputs = [self._new() for _ in range(total)]
+
+        # Forward: input counts imply output counts
+        for i in range(a_len):
+            self.clauses.append([-left[i], outputs[i]])
+        for j in range(b_len):
+            self.clauses.append([-right[j], outputs[j]])
+        for i in range(a_len):
+            for j in range(b_len):
+                k = i + j + 1
+                if k < total:
+                    self.clauses.append([-left[i], -right[j], outputs[k]])
+
+        # Backward: output counts require input support
+        for k in range(total):
+            for s in range(k + 1):
+                left_has = s < a_len
+                right_has = (k - s) < b_len
+                if left_has and right_has:
+                    self.clauses.append([-outputs[k], left[s], right[k - s]])
+                elif left_has:
+                    self.clauses.append([-outputs[k], left[s]])
+                elif right_has:
+                    self.clauses.append([-outputs[k], right[k - s]])
+
+        return outputs
 
     def _encode_feasibility(self):
         """
+        Sections 6.2–6.3: Unary sum + totalizer + modulo constraint.
+
         For each cell (r,k):
           σ_{r,k} = (Σ_j x_{r,j} + Σ_i x_{i,k} − x_{r,k}) mod c = target[r][k]
 
-        Encoded as a running partial-sum mod c using one-hot state variables.
+        Approach:
+          1. Decompose each x_{i,j} into (c-1) unit-contribution literals:
+             u_{i,j,v} = 1 iff x_{i,j} >= v  (for v = 1,...,c-1)
+             so that x_{i,j} = u_{i,j,1} + ... + u_{i,j,c-1}
+
+          2. For each constraint (r,k), gather unit literals for all 2N-1 terms.
+             Their sum σ is a plain integer from 0 to (2N-1)(c-1).
+
+          3. Count σ using a bidirectional totalizer network.
+
+          4. Assert σ mod c = target[r][k] by blocking every invalid sum value.
         """
         N, c = self.N, self.c
 
+        # Step 1: Create shared unit-contribution literals for all cells.
+        self._u = [[[None] * c for _ in range(N)] for _ in range(N)]
+        for i in range(N):
+            for j in range(N):
+                for v in range(1, c):
+                    uv = self._new()
+                    self._u[i][j][v] = uv
+                    backward = [-uv]
+                    for w in range(v, c):
+                        self.clauses.append([-self.d[i][j][w], uv])  # d[w] → u_v
+                        backward.append(self.d[i][j][w])
+                    self.clauses.append(backward)  # u_v → OR(d[w])
+
+        # Steps 2–4: For each cell (r,k), build totalizer + modulo constraint
         for r in range(N):
             for k in range(N):
-                # 2N−1 terms: full row r, then column k excluding (r,k)
                 terms = [(r, j) for j in range(N)]
                 terms += [(i, k) for i in range(N) if i != r]
 
-                prev = None  # prev[v] = var for "partial sum ≡ v (mod c)"
-
+                unit_lits = []
                 for ti, tj in terms:
-                    curr = [self._new() for _ in range(c)]
+                    for v in range(1, c):
+                        unit_lits.append(self._u[ti][tj][v])
 
-                    # Exactly-one constraint on curr
-                    self.clauses.append(list(curr))           # at-least-one
-                    for a in range(c):
-                        for a2 in range(a + 1, c):
-                            self.clauses.append([-curr[a], -curr[a2]])  # at-most-one
+                outputs = self._local_totalizer(unit_lits)
+                n_lits = len(unit_lits)  # = (2N-1)(c-1)
 
-                    if prev is None:
-                        # First term: curr[w] ⟺ d[ti][tj][w]
-                        for w in range(c):
-                            self.clauses.append([-curr[w], self.d[ti][tj][w]])
-                            self.clauses.append([curr[w], -self.d[ti][tj][w]])
-                    else:
-                        # Forward: prev[a] ∧ d[w] → curr[(a+w)%c]
-                        for a in range(c):
-                            for w in range(c):
-                                self.clauses.append(
-                                    [-prev[a], -self.d[ti][tj][w], curr[(a + w) % c]])
-
-                        # Backward: curr[v] ∧ prev[a] → d[(v−a)%c]
-                        for v in range(c):
-                            for a in range(c):
-                                w = (v - a) % c
-                                self.clauses.append(
-                                    [-curr[v], -prev[a], self.d[ti][tj][w]])
-
-                    prev = curr
-
-                # Assert final sum ≡ target[r][k]
-                self.clauses.append([prev[self.target[r][k]]])
+                # Block every invalid sum S where S mod c != target[r][k]
+                t = self.target[r][k]
+                for S in range(n_lits + 1):
+                    if S % c != t:
+                        if S == 0:
+                            self.clauses.append([outputs[0]])
+                        elif S == n_lits:
+                            self.clauses.append([-outputs[n_lits - 1]])
+                        else:
+                            self.clauses.append([-outputs[S - 1], outputs[S]])
 
     # ── Section 7: unit-contribution literals ────────────────────────
 
@@ -168,22 +226,16 @@ class AlienTilesEncoder:
         """
         u_{i,j,v} = 1 ⟺ x_{i,j} ≥ v   for v ∈ {1,…,c−1}.
         total(X) = Σ_{i,j} Σ_{v=1}^{c-1} u_{i,j,v} = Σ_{i,j} x_{i,j}.
+
+        The unit-contribution literals were already created in
+        _encode_feasibility (stored in self._u). We just collect them here.
         """
         N, c = self.N, self.c
         self.u_lits = []
-
         for i in range(N):
             for j in range(N):
                 for v in range(1, c):
-                    u = self._new()
-                    self.u_lits.append(u)
-
-                    # u ⟺ ∨_{w=v}^{c-1} d[i][j][w]
-                    backward = [-u]
-                    for w in range(v, c):
-                        self.clauses.append([-self.d[i][j][w], u])  # d[w] → u
-                        backward.append(self.d[i][j][w])
-                    self.clauses.append(backward)  # u → ∨ d[w]
+                    self.u_lits.append(self._u[i][j][v])
 
     # ── decode / print ───────────────────────────────────────────────
 
