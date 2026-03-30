@@ -5,6 +5,48 @@ import json
 import math
 import sys
 import time
+import openpyxl
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+
+
+def export_to_excel(N, c, target, result, elapsed, variant, path="results.xlsx"):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Results"
+
+    thin = Side(style="thin")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def write_matrix(matrix, start_row, start_col, title, color_map=None):
+        ws.cell(row=start_row, column=start_col, value=title).font = Font(bold=True)
+        for r in range(N):
+            for k in range(N):
+                val = matrix[r][k]
+                cell = ws.cell(row=start_row + 1 + r, column=start_col + k, value=val)
+                cell.alignment = Alignment(horizontal="center")
+                cell.border = border
+                if color_map and val in color_map:
+                    cell.fill = PatternFill("solid", fgColor=color_map[val])
+
+    ws["A1"] = "N"; ws["B1"] = N
+    ws["A2"] = "c"; ws["B2"] = c
+    ws["A3"] = "Variant"; ws["B3"] = variant
+    ws["A4"] = "Time (s)"; ws["B4"] = round(elapsed, 4)
+    ws["A5"] = "Total clicks"; ws["B5"] = result["total_clicks"] if result else "N/A"
+    ws["A6"] = "Verification"; ws["B6"] = "PASS" if result and verify_solution(N, c, result["T"] if result["T"] else target, result["X"]) else "FAIL"
+
+    palette = ["FFFFFF", "4472C4", "ED7D31", "A9D18E", "FF0000",
+               "FFFF00", "9B59B6", "1ABC9C", "E74C3C", "F39C12"]
+    color_map = {i: palette[i % len(palette)] for i in range(c)}
+
+    write_matrix(target, start_row=8, start_col=1, title="Target", color_map=color_map)
+    if result:
+        write_matrix(result["X"], start_row=8, start_col=N + 3, title="Click matrix X")
+        if result["T"] is not None:
+            write_matrix(result["T"], start_row=8, start_col=2 * N + 5, title="Hardest target T", color_map=color_map)
+
+    wb.save(path)
+    print(f"Results exported to {path}")
 
 
 def load_instance(path: str):
@@ -139,12 +181,13 @@ class AlienTilesILP:
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(f"Usage: python {sys.argv[0]} <instance.json> <variant>")
+        print(f"Usage: python {sys.argv[0]} <instance.json> <variant> [output.xlsx]")
         print("  variant: 1 (feasibility) | 2 (min clicks) | 3 (hardest puzzle)")
         sys.exit(1)
 
     path = sys.argv[1]
     variant = int(sys.argv[2]) if len(sys.argv) > 2 else 2
+    xlsx_path = sys.argv[3] if len(sys.argv) > 3 else "results.xlsx"
 
     N, c, target = load_instance(path)
     print(f"Instance: N={N}, c={c}")
@@ -181,3 +224,4 @@ if __name__ == "__main__":
         print(f"Verification: {'PASS' if ok else 'FAIL'}")
 
     print(f"Time: {elapsed:.3f}s")
+    export_to_excel(N, c, target, result, elapsed, variant, path=xlsx_path)

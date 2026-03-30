@@ -2,6 +2,8 @@ import json
 import sys
 import time
 
+import openpyxl
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from pycryptosat import Solver as CryptoSolver
 from pysat.solvers import Solver as PySATSolver
 from pysat.formula import CNF, WCNF
@@ -208,9 +210,10 @@ def approach_71_binary_search(N, target):
             print(f"  SAT call #{calls}: AtMost({mid}) → UNSAT")
 
     opt = sum(1 for v in click_vars if best_model[v])
+    matrix = [[1 if best_model[var_id(i, j, N)] else 0 for j in range(N)] for i in range(N)]
     print(f"\nOptimal: {opt} clicks  ({calls} SAT calls)")
     print_solution(best_model, N, lambda i, j: var_id(i, j, N))
-    return opt
+    return matrix, opt
 
 
 def approach_71_linear_search(N, target):
@@ -249,9 +252,10 @@ def approach_71_linear_search(N, target):
         UB = sum(1 for v in click_vars if model[v])
         print(f"  SAT call #{calls}: AtMost({UB}) → SAT  (actual = {UB})")
 
+    matrix = [[1 if best_model[var_id(i, j, N)] else 0 for j in range(N)] for i in range(N)]
     print(f"\nOptimal: {UB} clicks  ({calls} SAT calls)")
     print_solution(best_model, N, lambda i, j: var_id(i, j, N))
-    return UB
+    return matrix, UB
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -375,6 +379,7 @@ def approach_72_incremental(N, target):
 
     best_set = set(best_model)
     opt = sum(1 for v in click_vars if v in best_set)
+    matrix = [[1 if var_id(i, j, N) in best_set else 0 for j in range(N)] for i in range(N)]
     print(f"\nOptimal: {opt} clicks  ({calls} SAT calls)")
 
     # Print solution
@@ -391,7 +396,7 @@ def approach_72_incremental(N, target):
     print(f"Total clicks: {total}\n")
 
     solver.delete()
-    return opt
+    return matrix, opt
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -437,6 +442,7 @@ def approach_73_maxsat(N, target):
 
     model_set = set(model)
     opt = sum(1 for v in click_vars if v in model_set)
+    matrix = [[1 if var_id(i, j, N) in model_set else 0 for j in range(N)] for i in range(N)]
     print(f"Optimal: {opt} clicks")
 
     # Print solution
@@ -453,22 +459,90 @@ def approach_73_maxsat(N, target):
     print(f"Total clicks: {total}\n")
 
     rc2.delete()
-    return opt
+    return matrix, opt
 
 def get_click_from_crypto(model, click_vars):
         return {v for v in click_vars if v < len(model) and model[v]}
+
+
+def _verify(N, c, target, X):
+    for r in range(N):
+        for k in range(N):
+            sigma = sum(X[r][j] for j in range(N)) \
+                  + sum(X[i][k] for i in range(N)) \
+                  - X[r][k]
+            if sigma % c != target[r][k]:
+                return False
+    return True
+
+
+def export_to_excel(N, c, target, approach_results, xlsx_path="results.xlsx"):
+    """Export SAT results to Excel.
+    approach_results: list of (name, matrix, opt, elapsed) tuples
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Results"
+
+    thin = Side(style="thin")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    palette = ["FFFFFF", "4472C4"]  # c=2: white=0, blue=1
+
+    def write_matrix(matrix, start_row, start_col, title, use_color=False):
+        ws.cell(row=start_row, column=start_col, value=title).font = Font(bold=True)
+        for r in range(N):
+            for k in range(N):
+                val = matrix[r][k]
+                cell = ws.cell(row=start_row + 1 + r, column=start_col + k, value=val)
+                cell.alignment = Alignment(horizontal="center")
+                cell.border = border
+                if use_color and 0 <= val < len(palette):
+                    cell.fill = PatternFill("solid", fgColor=palette[val])
+
+    ws["A1"] = "N"; ws["B1"] = N
+    ws["A2"] = "c"; ws["B2"] = c
+
+    headers = ["Approach", "Optimal Clicks", "Time (s)", "Verified"]
+    for col, h in enumerate(headers, 1):
+        ws.cell(row=4, column=col, value=h).font = Font(bold=True)
+
+    for i, (name, matrix, opt, elapsed) in enumerate(approach_results):
+        row = 5 + i
+        ws.cell(row=row, column=1, value=name)
+        ws.cell(row=row, column=2, value=opt if opt is not None else "UNSAT")
+        ws.cell(row=row, column=3, value=round(elapsed, 4))
+        if matrix is not None:
+            ok = _verify(N, c, target, matrix)
+            ws.cell(row=row, column=4, value="PASS" if ok else "FAIL")
+        else:
+            ws.cell(row=row, column=4, value="N/A")
+
+    mat_row = 5 + len(approach_results) + 2
+    write_matrix(target, mat_row, 1, "Target", use_color=True)
+
+    col_start = N + 3
+    for name, matrix, opt, elapsed in approach_results:
+        if matrix is not None:
+            write_matrix(matrix, mat_row, col_start, f"X ({name})")
+            col_start += N + 2
+
+    wb.save(xlsx_path)
+    print(f"Results exported to {xlsx_path}")
+
+
 # ══════════════════════════════════════════════════════════════════════════
 #  Main
 # ══════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(f"Usage: python {sys.argv[0]} <instance.json> [approach]")
+        print(f"Usage: python {sys.argv[0]} <instance.json> [approach] [output.xlsx]")
         print("  approach: 'binary' | 'linear' | 'incremental' | 'maxsat' | 'all' (default)")
         sys.exit(1)
 
     path = sys.argv[1]
     approach = sys.argv[2] if len(sys.argv) > 2 else "all"
+    xlsx_path = sys.argv[3] if len(sys.argv) > 3 else "results.xlsx"
 
     N, c, target = load_instance(path)
     assert c == 2, f"This solver is for c = 2, got c = {c}"
@@ -476,31 +550,34 @@ if __name__ == "__main__":
     print(f"Instance: N={N}, c={c}")
     print_board(target, "Target")
 
-    results = {}
+    approach_results = []  # list of (name, matrix, opt, elapsed)
+
+    def _run(name, fn, *args):
+        t0 = time.perf_counter()
+        result = fn(*args)
+        elapsed = time.perf_counter() - t0
+        print(f"  Time: {elapsed:.4f}s\n")
+        matrix, opt = result if result is not None else (None, None)
+        approach_results.append((name, matrix, opt, elapsed))
 
     if approach in ("binary", "all"):
-        t0 = time.perf_counter()
-        results["7.1.1 Binary search"] = approach_71_binary_search(N, target)
-        print(f"  Time: {time.perf_counter() - t0:.4f}s\n")
+        _run("7.1.1 Binary search", approach_71_binary_search, N, target)
 
     if approach in ("linear", "all"):
-        t0 = time.perf_counter()
-        results["7.1.2 Linear search"] = approach_71_linear_search(N, target)
-        print(f"  Time: {time.perf_counter() - t0:.4f}s\n")
+        _run("7.1.2 Linear search", approach_71_linear_search, N, target)
 
     if approach in ("incremental", "all"):
-        t0 = time.perf_counter()
-        results["7.2 Incremental SAT"] = approach_72_incremental(N, target)
-        print(f"  Time: {time.perf_counter() - t0:.4f}s\n")
+        _run("7.2 Incremental SAT", approach_72_incremental, N, target)
 
     if approach in ("maxsat", "all"):
-        t0 = time.perf_counter()
-        results["7.3 MaxSAT"] = approach_73_maxsat(N, target)
-        print(f"  Time: {time.perf_counter() - t0:.4f}s\n")
+        _run("7.3 MaxSAT", approach_73_maxsat, N, target)
 
-    if approach == "all":
+    if approach == "all" and approach_results:
         print("=" * 60)
         print("Summary")
         print("=" * 60)
-        for name, opt in results.items():
-            print(f"  {name}: {opt} clicks")
+        for name, matrix, opt, elapsed in approach_results:
+            status = f"{opt} clicks" if opt is not None else "UNSATISFIABLE"
+            print(f"  {name}: {status}")
+
+    export_to_excel(N, c, target, approach_results, xlsx_path)
