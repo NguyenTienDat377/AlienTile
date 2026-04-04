@@ -1,49 +1,45 @@
 from docplex.mp.model import Model
-import gurobipy as gp
 
 import json
 import math
 import sys
 import time
 import openpyxl
-from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.styles import Font
+from multiprocessing import Process, Queue
 
 
-def export_to_excel(N, c, target, result, elapsed, variant, path="results.xlsx"):
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Results"
+def export_to_excel(instance_name, sheet_name, result, elapsed, num_vars, num_constrs, path="sat.xlsx"):
+    """Export ILP results to Excel, one sheet per variant (CPLEX + variant name).
 
-    thin = Side(style="thin")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    Appends a new row to the sheet if the workbook already exists.
+    """
+    import os
+    if os.path.exists(path):
+        wb = openpyxl.load_workbook(path)
+    else:
+        wb = openpyxl.Workbook()
+        if "Sheet" in wb.sheetnames:
+            del wb["Sheet"]
 
-    def write_matrix(matrix, start_row, start_col, title, color_map=None):
-        ws.cell(row=start_row, column=start_col, value=title).font = Font(bold=True)
-        for r in range(N):
-            for k in range(N):
-                val = matrix[r][k]
-                cell = ws.cell(row=start_row + 1 + r, column=start_col + k, value=val)
-                cell.alignment = Alignment(horizontal="center")
-                cell.border = border
-                if color_map and val in color_map:
-                    cell.fill = PatternFill("solid", fgColor=color_map[val])
+    headers = ["Instance", "Variables", "Clauses", "Runtime", "Optimal Click"]
 
-    ws["A1"] = "N"; ws["B1"] = N
-    ws["A2"] = "c"; ws["B2"] = c
-    ws["A3"] = "Variant"; ws["B3"] = variant
-    ws["A4"] = "Time (s)"; ws["B4"] = round(elapsed, 4)
-    ws["A5"] = "Total clicks"; ws["B5"] = result["total_clicks"] if result else "N/A"
-    ws["A6"] = "Verification"; ws["B6"] = "PASS" if result and verify_solution(N, c, result["T"] if result["T"] else target, result["X"]) else "FAIL"
+    if sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        next_row = ws.max_row + 1
+    else:
+        ws = wb.create_sheet(title=sheet_name)
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=h)
+            cell.font = Font(bold=True)
+        next_row = 2
 
-    palette = ["FFFFFF", "4472C4", "ED7D31", "A9D18E", "FF0000",
-               "FFFF00", "9B59B6", "1ABC9C", "E74C3C", "F39C12"]
-    color_map = {i: palette[i % len(palette)] for i in range(c)}
-
-    write_matrix(target, start_row=8, start_col=1, title="Target", color_map=color_map)
-    if result:
-        write_matrix(result["X"], start_row=8, start_col=N + 3, title="Click matrix X")
-        if result["T"] is not None:
-            write_matrix(result["T"], start_row=8, start_col=2 * N + 5, title="Hardest target T", color_map=color_map)
+    timed_out = elapsed == "TIMEOUT"
+    ws.cell(row=next_row, column=1, value=instance_name)
+    ws.cell(row=next_row, column=2, value="Timeout" if timed_out else num_vars)
+    ws.cell(row=next_row, column=3, value="Timeout" if timed_out else num_constrs)
+    ws.cell(row=next_row, column=4, value="Timeout" if timed_out else round(float(elapsed), 4))
+    ws.cell(row=next_row, column=5, value="Timeout" if timed_out else (result["total_clicks"] if result is not None else "UNSAT"))
 
     wb.save(path)
     print(f"Results exported to {path}")
@@ -169,59 +165,94 @@ class AlienTilesILP:
         solution = self.mdl.solve()
         if solution is None:
             return None
-        X = [[int(self.x_ij[i][j].solution_value)
+        X = [[round(self.x_ij[i][j].solution_value)
               for j in range(self.N)] for i in range(self.N)]
         T = None
         if self.t_rk[0][0] is not None:
-            T = [[int(self.t_rk[r][k].solution_value)
+            T = [[round(self.t_rk[r][k].solution_value)
                   for k in range(self.N)] for r in range(self.N)]
         total = sum(X[i][j] for i in range(self.N) for j in range(self.N))
         return {"X": X, "T": T, "total_clicks": total}
 
 
+def _worker(queue, N, c, target, variant):
+    """Build and solve in a child process; put (result, num_vars, num_constrs) in queue."""
+    try:
+        ilp = AlienTilesILP(N, c, target)
+        if variant == 1:
+            ilp.build_variant1()
+        elif variant == 2:
+            ilp.build_variant2()
+        elif variant == 3:
+            ilp.build_variant3()
+        num_vars = ilp.mdl.number_of_variables
+        num_constrs = ilp.mdl.number_of_constraints
+        result = ilp.solve()
+        queue.put((result, num_vars, num_constrs))
+    except Exception as exc:
+        queue.put(exc)
+
+
 if __name__ == "__main__":
+    import os
+
     if len(sys.argv) < 2:
-        print(f"Usage: python {sys.argv[0]} <instance.json> <variant> [output.xlsx]")
-        print("  variant: 1 (feasibility) | 2 (min clicks) | 3 (hardest puzzle)")
+        print(f"Usage: python {sys.argv[0]} <instance.json> [variant] [output.xlsx]")
+        print("  variant: 1 (feasibility) | 2 (min clicks) | 3 (hardest puzzle) | all (default)")
         sys.exit(1)
 
     path = sys.argv[1]
-    variant = int(sys.argv[2]) if len(sys.argv) > 2 else 2
-    xlsx_path = sys.argv[3] if len(sys.argv) > 3 else "results.xlsx"
+    variant_arg = sys.argv[2] if len(sys.argv) > 2 else "all"
+    xlsx_path = sys.argv[3] if len(sys.argv) > 3 else "sat.xlsx"
+
+    TIMEOUT_SECONDS = 300  # seconds; change this value to adjust the limit
+
+    instance_name = os.path.splitext(os.path.basename(path))[0]
 
     N, c, target = load_instance(path)
     print(f"Instance: N={N}, c={c}")
     print_board(target, "Target")
 
-    ilp = AlienTilesILP(N, c, target)
+    variants = [1, 2, 3] if variant_arg == "all" else [int(variant_arg)]
 
-    print(f"--- Variant {variant} ---")
-    t0 = time.time()
+    for variant in variants:
+        sheet_name = f"CPLEX Variant {variant}"
+        print(f"--- Variant {variant} ---")
 
-    if variant == 1:
-        ilp.build_variant1()
-    elif variant == 2:
-        ilp.build_variant2()
-    elif variant == 3:
-        ilp.build_variant3()
-    else:
-        print(f"Unknown variant: {variant}")
-        sys.exit(1)
+        queue = Queue()
+        p = Process(target=_worker, args=(queue, N, c, target, variant))
+        t0 = time.time()
+        p.start()
+        p.join(timeout=TIMEOUT_SECONDS)
 
-    result = ilp.solve()
-    elapsed = time.time() - t0
+        if p.is_alive():
+            p.kill()
+            p.join()
+            elapsed = time.time() - t0
+            print(f"  TIMEOUT after {elapsed:.1f}s — skipping.")
+            export_to_excel(instance_name, sheet_name, None, "TIMEOUT", None, None, path=xlsx_path)
+            continue
 
-    if result is None:
-        print("No solution found (infeasible).")
-    else:
-        print_board(result["X"], "Click matrix X")
-        print(f"Total clicks: {result['total_clicks']}")
-        if result["T"] is not None:
-            print_board(result["T"], "Hardest target T")
-        ok = verify_solution(N, c,
-                             result["T"] if result["T"] else target,
-                             result["X"])
-        print(f"Verification: {'PASS' if ok else 'FAIL'}")
+        elapsed = time.time() - t0
+        payload = queue.get() if not queue.empty() else None
 
-    print(f"Time: {elapsed:.3f}s")
-    export_to_excel(N, c, target, result, elapsed, variant, path=xlsx_path)
+        if isinstance(payload, Exception):
+            print(f"  ERROR: {payload}")
+            continue
+
+        result, num_vars, num_constrs = payload if payload is not None else (None, None, None)
+
+        if result is None:
+            print("No solution found (infeasible).")
+        else:
+            print_board(result["X"], "Click matrix X")
+            print(f"Total clicks: {result['total_clicks']}")
+            if result["T"] is not None:
+                print_board(result["T"], "Hardest target T")
+            ok = verify_solution(N, c,
+                                 result["T"] if result["T"] else target,
+                                 result["X"])
+            print(f"Verification: {'PASS' if ok else 'FAIL'}")
+
+        print(f"Time: {elapsed:.3f}s")
+        export_to_excel(instance_name, sheet_name, result, elapsed, num_vars, num_constrs, path=xlsx_path)
