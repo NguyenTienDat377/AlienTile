@@ -1,4 +1,5 @@
-from docplex.mp.model import Model
+from docplex.cp.model import CpoModel
+
 
 import json
 import math
@@ -7,7 +8,6 @@ import time
 import openpyxl
 from openpyxl.styles import Font
 from multiprocessing import Process, Queue
-
 
 def export_to_excel(instance_name, sheet_name, result, elapsed, num_vars, num_constrs, path="sat.xlsx"):
     """Export ILP results to Excel, one sheet per variant (CPLEX + variant name).
@@ -79,21 +79,21 @@ class AlienTilesILP:
         self.x_ij = [[None] * N for _ in range(N)]
         self.q_rk = [[None] * N for _ in range(N)]
         self.t_rk = [[None] * N for _ in range(N)]
-        self.mdl = Model(name="AlienTilesILP")
+        self.mdl = CpoModel(name="AlienTilesCP")
 
     def _encode_variables(self) -> None:
         upper_bound = math.floor((2 * self.N - 1) * (self.c - 1) / self.c)
         for i in range(self.N):
             for j in range(self.N):
                 self.x_ij[i][j] = self.mdl.integer_var(
-                    name=f"x_{i}_{j}", lb=0, ub=self.c - 1
+                    name=f"x_{i}_{j}", min=0, max=self.c - 1
                 )
         for r in range(self.N):
             for k in range(self.N):
                 self.q_rk[r][k] = self.mdl.integer_var(
-                    name=f"q_{r}_{k}", lb=0, ub=upper_bound
+                    name=f"q_{r}_{k}", min=0, max=upper_bound
                 )
-
+                
     def _encode_constraints(self, target_vars=None) -> None:
         t = target_vars if target_vars else self.target
         for r in range(self.N):
@@ -101,28 +101,24 @@ class AlienTilesILP:
                 sigma = (self.mdl.sum(self.x_ij[r][j] for j in range(self.N))
                          + self.mdl.sum(self.x_ij[i][k] for i in range(self.N))
                          - self.x_ij[r][k])
-                self.mdl.add_constraint(
-                    sigma - self.c * self.q_rk[r][k] == t[r][k],
-                    ctname=f"mod_eq_{r}_{k}"
+                self.mdl.add(
+                    sigma - self.c * self.q_rk[r][k] == t[r][k]
                 )
 
     def _encode_symmetry_breaking(self) -> None:
         N = self.N
 
         for i in range(N - 1):
-            self.mdl.add_constraint(
+            self.mdl.add(
                 self.mdl.sum(self.x_ij[i][j] for j in range(N))
-                <= self.mdl.sum(self.x_ij[i + 1][j] for j in range(N)),
-                ctname=f"row_sym_{i}"
+                <= self.mdl.sum(self.x_ij[i + 1][j] for j in range(N))
             )
         for j in range(N - 1):
-            self.mdl.add_constraint(
+            self.mdl.add(
                 self.mdl.sum(self.x_ij[i][j] for i in range(N))
-                <= self.mdl.sum(self.x_ij[i][j + 1] for i in range(N)),
-                ctname=f"col_sym_{j}"
+                <= self.mdl.sum(self.x_ij[i][j + 1] for i in range(N))
             )
-        self.mdl.add_constraint(self.x_ij[0][1] <= self.x_ij[1][0],
-                                ctname="diag_sym")
+        self.mdl.add(self.x_ij[0][1] <= self.x_ij[1][0])
 
     def build_variant1(self, symmetry_breaking=False):
         self._encode_variables()
@@ -145,14 +141,13 @@ class AlienTilesILP:
         for r in range(self.N):
             for k in range(self.N):
                 self.t_rk[r][k] = self.mdl.integer_var(
-                    name=f"t_{r}_{k}", lb=0, ub=self.c - 1
+                    name=f"t_{r}_{k}", min=0, max=self.c - 1
                 )
         self._encode_constraints(target_vars=self.t_rk)
 
-        self.mdl.add_constraint(
+        self.mdl.add(
             self.mdl.sum(self.t_rk[r][k]
-                         for r in range(self.N) for k in range(self.N)) >= 1,
-            ctname="non_trivial_target"
+                         for r in range(self.N) for k in range(self.N)) >= 1
         )
         if symmetry_breaking:
             self._encode_symmetry_breaking()
@@ -163,13 +158,13 @@ class AlienTilesILP:
 
     def solve(self):
         solution = self.mdl.solve()
-        if solution is None:
+        if solution is None or not solution.is_solution():
             return None
-        X = [[round(self.x_ij[i][j].solution_value)
+        X = [[round(solution.get_value(self.x_ij[i][j]))
               for j in range(self.N)] for i in range(self.N)]
         T = None
         if self.t_rk[0][0] is not None:
-            T = [[round(self.t_rk[r][k].solution_value)
+            T = [[round(solution.get_value(self.t_rk[r][k]))
                   for k in range(self.N)] for r in range(self.N)]
         total = sum(X[i][j] for i in range(self.N) for j in range(self.N))
         return {"X": X, "T": T, "total_clicks": total}
@@ -185,8 +180,8 @@ def _worker(queue, N, c, target, variant):
             ilp.build_variant2()
         elif variant == 3:
             ilp.build_variant3()
-        num_vars = ilp.mdl.number_of_variables
-        num_constrs = ilp.mdl.number_of_constraints
+        num_vars = len(ilp.mdl.get_all_variables())
+        num_constrs = len(ilp.mdl.get_all_expressions())
         result = ilp.solve()
         queue.put((result, num_vars, num_constrs))
     except Exception as exc:
@@ -256,3 +251,6 @@ if __name__ == "__main__":
 
         print(f"Time: {elapsed:.3f}s")
         export_to_excel(instance_name, sheet_name, result, elapsed, num_vars, num_constrs, path=xlsx_path)
+
+
+                            

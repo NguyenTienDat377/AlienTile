@@ -29,6 +29,7 @@ import json
 import math
 import sys
 import time
+from multiprocessing import Process, Queue
 
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -80,7 +81,7 @@ class AlienTilesEncoder:
     using the binary encoding from Sections 6.1-6.3.
     """
 
-    def __init__(self, N, c, target):
+    def __init__(self, N, c, target, symmetry_breaking=False):
         self.N = N
         self.c = c
         self.target = target
@@ -90,6 +91,7 @@ class AlienTilesEncoder:
         self.p = None         # p[i][j][l]: SAT var for bit l of x_{i,j}
         self.d = None         # d[i][j][w]: SAT var for "x_{i,j} = w"
         self.u_lits = None    # unit-contribution literals for objective
+        self.symmetry_breaking = symmetry_breaking
 
     def _new(self):
         """Allocate a fresh SAT variable."""
@@ -109,6 +111,8 @@ class AlienTilesEncoder:
         self._encode_click_vars()
         self._encode_value_indicators()
         self._encode_feasibility()
+        if self.symmetry_breaking:
+            self._encode_symmetry_breaking()
         self._encode_unit_lits()
         return self.clauses, self.u_lits, self.top
 
@@ -305,6 +309,57 @@ class AlienTilesEncoder:
                         else:
                             self.clauses.append([-outputs[S - 1], outputs[S]])
 
+    # ── Section 5.4: Symmetry-breaking constraints (optional) ────────
+
+    def _encode_symmetry_breaking(self):
+        """
+        Section 5.4: Optional symmetry-breaking constraints.
+
+        Breaks the N! × N! × 2 symmetry group via three constraints:
+          (8) Row-sum ordering:    sum_j x_{1,j} ≤ ... ≤ sum_j x_{N,j}
+          (9) Column-sum ordering: sum_i x_{i,1} ≤ ... ≤ sum_i x_{i,N}
+          (10) Diagonal reflection: x_{1,2} ≤ x_{2,1}
+
+        For (8)/(9): build a totalizer over each row/column's unit literals,
+        then add output[i][k] → output[i+1][k] for every threshold k.
+
+        For (10): u[i][j][v] = (x_{i,j} ≥ v), so x_{1,2} ≤ x_{2,1} is
+        exactly u[0][1][v] → u[1][0][v] for each v in {1,...,c-1}.
+        """
+        N, c = self.N, self.c
+        if N < 2:
+            return
+
+        # (8) Row-sum ordering
+        row_outputs = []
+        for i in range(N):
+            row_lits = [self._u[i][j][v]
+                        for j in range(N) for v in range(1, c)]
+            row_outputs.append(self._local_totalizer(row_lits))
+
+        for i in range(N - 1):
+            n = min(len(row_outputs[i]), len(row_outputs[i + 1]))
+            for k in range(n):
+                # row_sum[i] >= k+1  =>  row_sum[i+1] >= k+1
+                self.clauses.append([-row_outputs[i][k], row_outputs[i + 1][k]])
+
+        # (9) Column-sum ordering
+        col_outputs = []
+        for j in range(N):
+            col_lits = [self._u[i][j][v]
+                        for i in range(N) for v in range(1, c)]
+            col_outputs.append(self._local_totalizer(col_lits))
+
+        for j in range(N - 1):
+            n = min(len(col_outputs[j]), len(col_outputs[j + 1]))
+            for k in range(n):
+                # col_sum[j] >= k+1  =>  col_sum[j+1] >= k+1
+                self.clauses.append([-col_outputs[j][k], col_outputs[j + 1][k]])
+
+        # (10) Diagonal reflection: x_{1,2} <= x_{2,1}  (0-indexed: [0][1] vs [1][0])
+        for v in range(1, c):
+            self.clauses.append([-self._u[0][1][v], self._u[1][0][v]])
+
     # ── Section 7: Unit-contribution literals for objective ──────────
 
     def _encode_unit_lits(self):
@@ -357,64 +412,50 @@ class AlienTilesEncoder:
         return matrix, total
 
 
-def _build(N, c, target):
+def _build(N, c, target, symmetry_breaking=False):
     """Create a fresh encoder and build its CNF. Returns (enc, clauses, u_lits, top)."""
-    enc = AlienTilesEncoder(N, c, target)
+    enc = AlienTilesEncoder(N, c, target, symmetry_breaking=symmetry_breaking)
     clauses, u_lits, top = enc.build()
     return enc, clauses, u_lits, top
 
 
-def export_to_excel(N, c, target, approach_results, xlsx_path="results.xlsx"):
-    """Export SAT results to Excel.
-    approach_results: list of (name, matrix, opt, elapsed) tuples
+def export_to_excel(instance_name, approach_results, xlsx_path="sat.xlsx"):
+    """Export SAT results to Excel, one sheet per approach (solver + method).
+
+    approach_results: list of (sheet_name, matrix, opt, elapsed, num_vars, num_clauses) tuples
+    Appends a new row to each sheet if the workbook already exists.
     """
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Results"
+    import os
+    if os.path.exists(xlsx_path):
+        wb = openpyxl.load_workbook(xlsx_path)
+    else:
+        wb = openpyxl.Workbook()
+        # Remove the default empty sheet created by openpyxl
+        if "Sheet" in wb.sheetnames:
+            del wb["Sheet"]
 
-    thin = Side(style="thin")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    palette = ["FFFFFF", "4472C4", "ED7D31", "A9D18E", "FF0000",
-               "FFFF00", "9B59B6", "1ABC9C", "E74C3C", "F39C12"]
-    color_map = {i: palette[i % len(palette)] for i in range(c)}
+    headers = ["Instance", "Variables", "Clauses", "Runtime", "Optimal Click"]
 
-    def write_matrix(matrix, start_row, start_col, title, cmap=None):
-        ws.cell(row=start_row, column=start_col, value=title).font = Font(bold=True)
-        for r in range(N):
-            for k in range(N):
-                val = matrix[r][k]
-                cell = ws.cell(row=start_row + 1 + r, column=start_col + k, value=val)
-                cell.alignment = Alignment(horizontal="center")
-                cell.border = border
-                if cmap and val in cmap:
-                    cell.fill = PatternFill("solid", fgColor=cmap[val])
-
-    ws["A1"] = "N"; ws["B1"] = N
-    ws["A2"] = "c"; ws["B2"] = c
-
-    headers = ["Approach", "Optimal Clicks", "Time (s)", "Verified"]
-    for col, h in enumerate(headers, 1):
-        ws.cell(row=4, column=col, value=h).font = Font(bold=True)
-
-    for i, (name, matrix, opt, elapsed) in enumerate(approach_results):
-        row = 5 + i
-        ws.cell(row=row, column=1, value=name)
-        ws.cell(row=row, column=2, value=opt if opt is not None else "UNSAT")
-        ws.cell(row=row, column=3, value=round(elapsed, 4))
-        if matrix is not None:
-            ok = verify_solution(N, c, target, matrix)
-            ws.cell(row=row, column=4, value="PASS" if ok else "FAIL")
+    for sheet_name, matrix, opt, elapsed, num_vars, num_clauses in approach_results:
+        # Get or create the sheet for this approach
+        if sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            next_row = ws.max_row + 1
         else:
-            ws.cell(row=row, column=4, value="N/A")
+            ws = wb.create_sheet(title=sheet_name)
+            # Write header row
+            for col, h in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col, value=h)
+                cell.font = Font(bold=True)
+            next_row = 2
 
-    mat_row = 5 + len(approach_results) + 2
-    write_matrix(target, mat_row, 1, "Target", cmap=color_map)
+        timed_out = elapsed == "TIMEOUT"
 
-    col_start = N + 3
-    for name, matrix, opt, elapsed in approach_results:
-        if matrix is not None:
-            write_matrix(matrix, mat_row, col_start, f"X ({name})")
-            col_start += N + 2
+        ws.cell(row=next_row, column=1, value=instance_name)
+        ws.cell(row=next_row, column=2, value="Timeout" if timed_out else num_vars)
+        ws.cell(row=next_row, column=3, value="Timeout" if timed_out else num_clauses)
+        ws.cell(row=next_row, column=4, value="Timeout" if timed_out else round(float(elapsed), 4))
+        ws.cell(row=next_row, column=5, value="Timeout" if timed_out else (opt if opt is not None else "UNSAT"))
 
     wb.save(xlsx_path)
     print(f"Results exported to {xlsx_path}")
@@ -424,7 +465,7 @@ def export_to_excel(N, c, target, approach_results, xlsx_path="results.xlsx"):
 #  Section 7.1: Non-incremental SAT (multiple independent calls)
 # ══════════════════════════════════════════════════════════════════════════
 
-def approach_71_binary(N, c, target):
+def approach_71_binary(N, c, target, symmetry_breaking=False):
     """
     Section 7.1.1 — Binary search.
 
@@ -447,8 +488,8 @@ def approach_71_binary(N, c, target):
     t_start = time.perf_counter()
 
     # Check feasibility first (no cardinality bound)
-    enc, clauses, u_lits, top = _build(N, c, target)
-    solver = PySATSolver(name='cadical153', bootstrap_with=clauses)
+    enc, clauses, u_lits, top = _build(N, c, target, symmetry_breaking)
+    solver = PySATSolver(name='cadical195', bootstrap_with=clauses)
 
     if not solver.solve():
         print("  Result: UNSATISFIABLE -- no solution exists.\n")
@@ -468,10 +509,10 @@ def approach_71_binary(N, c, target):
         mid = (lo + hi) // 2
         calls += 1
 
-        enc2, cl2, ul2, top2 = _build(N, c, target)
+        enc2, cl2, ul2, top2 = _build(N, c, target, symmetry_breaking)
         am = CardEnc.atmost(ul2, bound=mid, top_id=top2,
                             encoding=EncType.seqcounter)
-        s = PySATSolver(name='cadical153', bootstrap_with=cl2 + am.clauses)
+        s = PySATSolver(name='cadical195', bootstrap_with=cl2 + am.clauses)
 
         if s.solve():
             ms = set(s.get_model())
@@ -488,10 +529,10 @@ def approach_71_binary(N, c, target):
     elapsed = time.perf_counter() - t_start
     print(f"  Optimal: {opt} clicks  ({calls} SAT calls, {elapsed:.4f}s)")
 
-    return matrix, opt
+    return matrix, opt, enc.top, len(enc.clauses)
 
 
-def approach_71_linear(N, c, target):
+def approach_71_linear(N, c, target, symmetry_breaking=False):
     """
     Section 7.1.2 — Linear search (top-down).
 
@@ -514,8 +555,8 @@ def approach_71_linear(N, c, target):
     t_start = time.perf_counter()
 
     # Check feasibility
-    enc, clauses, u_lits, top = _build(N, c, target)
-    solver = PySATSolver(name='cadical153', bootstrap_with=clauses)
+    enc, clauses, u_lits, top = _build(N, c, target, symmetry_breaking)
+    solver = PySATSolver(name='cadical195', bootstrap_with=clauses)
 
     if not solver.solve():
         print("  Result: UNSATISFIABLE -- no solution exists.\n")
@@ -532,7 +573,7 @@ def approach_71_linear(N, c, target):
     # Linear top-down search
     while True:
         calls += 1
-        enc2, cl2, ul2, top2 = _build(N, c, target)
+        enc2, cl2, ul2, top2 = _build(N, c, target, symmetry_breaking)
         am = CardEnc.atmost(ul2, bound=UB - 1, top_id=top2,
                             encoding=EncType.seqcounter)
         s = PySATSolver(name='cadical153', bootstrap_with=cl2 + am.clauses)
@@ -555,7 +596,7 @@ def approach_71_linear(N, c, target):
     ok = verify_solution(N, c, target, matrix)
     print(f"  Verification: {'PASSED' if ok else 'FAILED'}")
     print()
-    return matrix, opt
+    return matrix, opt, enc.top, len(enc.clauses)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -616,7 +657,7 @@ def _build_totalizer(solver, lits, top):
     return outputs, top
 
 
-def approach_72_incremental(N, c, target):
+def approach_72_incremental(N, c, target, symmetry_breaking=False):
     """
     Section 7.2.1 — Incremental SAT with assumption-based bound control.
 
@@ -648,10 +689,10 @@ def approach_72_incremental(N, c, target):
     t_start = time.perf_counter()
 
     # Build feasibility encoding + unit literals
-    enc, clauses, u_lits, top = _build(N, c, target)
+    enc, clauses, u_lits, top = _build(N, c, target, symmetry_breaking)
 
     # Create a single persistent solver
-    solver = PySATSolver(name='cadical153', bootstrap_with=clauses)
+    solver = PySATSolver(name='cadical195', bootstrap_with=clauses)
 
     # Build totalizer network ONCE
     outputs, top = _build_totalizer(solver, u_lits, top)
@@ -695,14 +736,14 @@ def approach_72_incremental(N, c, target):
 
     solver.delete()
     print()
-    return matrix, opt
+    return matrix, opt, enc.top, len(enc.clauses)
 
 
 # ══════════════════════════════════════════════════════════════════════════
 #  Section 7.3: MaxSAT — partial weighted MaxSAT
 # ══════════════════════════════════════════════════════════════════════════
 
-def approach_73_maxsat(N, c, target):
+def approach_73_maxsat(N, c, target, symmetry_breaking=False):
     """
     Section 7.3.1 — Partial weighted MaxSAT via RC2.
 
@@ -725,7 +766,7 @@ def approach_73_maxsat(N, c, target):
     t_start = time.perf_counter()
 
     # Build feasibility encoding + unit literals
-    enc, clauses, u_lits, top = _build(N, c, target)
+    enc, clauses, u_lits, top = _build(N, c, target, symmetry_breaking)
 
     # Construct WCNF (weighted CNF)
     wcnf = WCNF()
@@ -759,7 +800,20 @@ def approach_73_maxsat(N, c, target):
 
     rc2.delete()
     print()
-    return matrix, opt
+    return matrix, opt, enc.top, len(enc.clauses)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  Multiprocessing worker (must be module-level for pickling on macOS)
+# ══════════════════════════════════════════════════════════════════════════
+
+def _worker(queue, fn, args):
+    """Run fn(*args) in a child process and put the result in queue."""
+    try:
+        result = fn(*args)
+        queue.put(result)
+    except Exception as exc:
+        queue.put(exc)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -768,47 +822,79 @@ def approach_73_maxsat(N, c, target):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(f"Usage: python {sys.argv[0]} <instance.json> [approach] [output.xlsx]")
+        print(f"Usage: python {sys.argv[0]} <instance.json> [approach] [sym] [output.xlsx]")
         print("  approach: 'binary' | 'linear' | 'incremental' | 'maxsat' | 'all' (default)")
+        print("  sym:      add 'sym' to enable symmetry-breaking constraints (Section 5.4)")
         sys.exit(1)
 
     path = sys.argv[1]
-    approach = sys.argv[2] if len(sys.argv) > 2 else "all"
-    xlsx_path = sys.argv[3] if len(sys.argv) > 3 else "results.xlsx"
+    extra = sys.argv[2:]
+    use_sym = "sym" in extra
+    approach = next((a for a in extra if a in ("binary", "linear", "incremental", "maxsat", "all")), "all")
+    xlsx_path = next((a for a in extra if a.endswith(".xlsx")), "sat.xlsx")
+
+    import os
+    instance_name = os.path.splitext(os.path.basename(path))[0]
 
     N, c, target = load_instance(path)
     print(f"Instance: N={N}, c={c}")
+    print(f"Symmetry breaking: {'ON' if use_sym else 'OFF'}")
     print_board(target, "Target")
 
-    approach_results = []  # list of (name, matrix, opt, elapsed)
+    # ── Timeout configuration ──────────────────────────────────────────
+    TIMEOUT_SECONDS = 300  # seconds; change this value to adjust the limit
 
-    def _run(name, fn, *args):
+    # Each entry: (sheet_name, matrix, opt, elapsed, num_vars, num_clauses)
+    approach_results = []
+
+    def _run(sheet_name, fn, *args):
+        queue = Queue()
+        p = Process(target=_worker, args=(queue, fn, args))
         t0 = time.perf_counter()
-        result = fn(*args)
+        p.start()
+        p.join(timeout=TIMEOUT_SECONDS)
+
+        if p.is_alive():
+            p.kill()
+            p.join()
+            elapsed = time.perf_counter() - t0
+            print(f"  [{sheet_name}] TIMEOUT after {elapsed:.1f}s — skipping.")
+            approach_results.append((sheet_name, None, None, "TIMEOUT", None, None))
+            return
+
         elapsed = time.perf_counter() - t0
-        matrix, opt = result if result is not None else (None, None)
-        approach_results.append((name, matrix, opt, elapsed))
+        result = queue.get() if not queue.empty() else None
+        if isinstance(result, Exception):
+            print(f"  [{sheet_name}] ERROR: {result}")
+            approach_results.append((sheet_name, None, None, "ERROR", None, None))
+            return
+
+        if result is not None:
+            matrix, opt, num_vars, num_clauses = result
+        else:
+            matrix, opt, num_vars, num_clauses = None, None, None, None
+        approach_results.append((sheet_name, matrix, opt, elapsed, num_vars, num_clauses))
 
     if approach in ("binary", "all"):
-        _run("7.1.1 Binary search", approach_71_binary, N, c, target)
+        _run("Binary Search", approach_71_binary, N, c, target, use_sym)
 
     if approach in ("linear", "all"):
-        _run("7.1.2 Linear search", approach_71_linear, N, c, target)
+        _run("Linear Search", approach_71_linear, N, c, target, use_sym)
 
     if approach in ("incremental", "all"):
-        _run("7.2 Incremental SAT", approach_72_incremental, N, c, target)
+        _run("Incremental", approach_72_incremental, N, c, target, use_sym)
 
     if approach in ("maxsat", "all"):
-        _run("7.3 MaxSAT", approach_73_maxsat, N, c, target)
+        _run("MaxSAT", approach_73_maxsat, N, c, target, use_sym)
 
     # Summary
     if approach == "all" and approach_results:
         print("=" * 60)
         print("Summary")
         print("=" * 60)
-        for name, matrix, opt, elapsed in approach_results:
+        for sheet_name, matrix, opt, elapsed, _, _ in approach_results:
             status = f"{opt} clicks" if opt is not None else "UNSATISFIABLE"
-            print(f"  {name}: {status}")
+            print(f"  {sheet_name}: {status}")
         print()
 
-    export_to_excel(N, c, target, approach_results, xlsx_path)
+    export_to_excel(instance_name, approach_results, xlsx_path)

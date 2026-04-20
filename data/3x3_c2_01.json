@@ -1,0 +1,11 @@
+{
+  "name": "3x3_c3_01",
+  "description": "3x3 grid, 3 colours, instance 1/10",
+  "N": 3,
+  "c": 3,
+  "target": [
+    [1, 1, 1],
+    [1, 1, 1],
+    [1, 1, 1]
+  ]
+}
