@@ -81,7 +81,7 @@ class AlienTilesEncoder:
     using the binary encoding from Sections 6.1-6.3.
     """
 
-    def __init__(self, N, c, target):
+    def __init__(self, N, c, target, symmetry_breaking=False):
         self.N = N
         self.c = c
         self.target = target
@@ -91,6 +91,7 @@ class AlienTilesEncoder:
         self.p = None         # p[i][j][l]: SAT var for bit l of x_{i,j}
         self.d = None         # d[i][j][w]: SAT var for "x_{i,j} = w"
         self.u_lits = None    # unit-contribution literals for objective
+        self.symmetry_breaking = symmetry_breaking
 
     def _new(self):
         """Allocate a fresh SAT variable."""
@@ -110,6 +111,8 @@ class AlienTilesEncoder:
         self._encode_click_vars()
         self._encode_value_indicators()
         self._encode_feasibility()
+        if self.symmetry_breaking:
+            self._encode_symmetry_breaking()
         self._encode_unit_lits()
         return self.clauses, self.u_lits, self.top
 
@@ -306,6 +309,57 @@ class AlienTilesEncoder:
                         else:
                             self.clauses.append([-outputs[S - 1], outputs[S]])
 
+    # ── Section 5.4: Symmetry-breaking constraints (optional) ────────
+
+    def _encode_symmetry_breaking(self):
+        """
+        Section 5.4: Optional symmetry-breaking constraints.
+
+        Breaks the N! × N! × 2 symmetry group via three constraints:
+          (8) Row-sum ordering:    sum_j x_{1,j} ≤ ... ≤ sum_j x_{N,j}
+          (9) Column-sum ordering: sum_i x_{i,1} ≤ ... ≤ sum_i x_{i,N}
+          (10) Diagonal reflection: x_{1,2} ≤ x_{2,1}
+
+        For (8)/(9): build a totalizer over each row/column's unit literals,
+        then add output[i][k] → output[i+1][k] for every threshold k.
+
+        For (10): u[i][j][v] = (x_{i,j} ≥ v), so x_{1,2} ≤ x_{2,1} is
+        exactly u[0][1][v] → u[1][0][v] for each v in {1,...,c-1}.
+        """
+        N, c = self.N, self.c
+        if N < 2:
+            return
+
+        # (8) Row-sum ordering
+        row_outputs = []
+        for i in range(N):
+            row_lits = [self._u[i][j][v]
+                        for j in range(N) for v in range(1, c)]
+            row_outputs.append(self._local_totalizer(row_lits))
+
+        for i in range(N - 1):
+            n = min(len(row_outputs[i]), len(row_outputs[i + 1]))
+            for k in range(n):
+                # row_sum[i] >= k+1  =>  row_sum[i+1] >= k+1
+                self.clauses.append([-row_outputs[i][k], row_outputs[i + 1][k]])
+
+        # (9) Column-sum ordering
+        col_outputs = []
+        for j in range(N):
+            col_lits = [self._u[i][j][v]
+                        for i in range(N) for v in range(1, c)]
+            col_outputs.append(self._local_totalizer(col_lits))
+
+        for j in range(N - 1):
+            n = min(len(col_outputs[j]), len(col_outputs[j + 1]))
+            for k in range(n):
+                # col_sum[j] >= k+1  =>  col_sum[j+1] >= k+1
+                self.clauses.append([-col_outputs[j][k], col_outputs[j + 1][k]])
+
+        # (10) Diagonal reflection: x_{1,2} <= x_{2,1}  (0-indexed: [0][1] vs [1][0])
+        for v in range(1, c):
+            self.clauses.append([-self._u[0][1][v], self._u[1][0][v]])
+
     # ── Section 7: Unit-contribution literals for objective ──────────
 
     def _encode_unit_lits(self):
@@ -358,9 +412,9 @@ class AlienTilesEncoder:
         return matrix, total
 
 
-def _build(N, c, target):
+def _build(N, c, target, symmetry_breaking=False):
     """Create a fresh encoder and build its CNF. Returns (enc, clauses, u_lits, top)."""
-    enc = AlienTilesEncoder(N, c, target)
+    enc = AlienTilesEncoder(N, c, target, symmetry_breaking=symmetry_breaking)
     clauses, u_lits, top = enc.build()
     return enc, clauses, u_lits, top
 
@@ -411,7 +465,7 @@ def export_to_excel(instance_name, approach_results, xlsx_path="sat.xlsx"):
 #  Section 7.1: Non-incremental SAT (multiple independent calls)
 # ══════════════════════════════════════════════════════════════════════════
 
-def approach_71_binary(N, c, target):
+def approach_71_binary(N, c, target, symmetry_breaking=False):
     """
     Section 7.1.1 — Binary search.
 
@@ -434,7 +488,11 @@ def approach_71_binary(N, c, target):
     t_start = time.perf_counter()
 
     # Check feasibility first (no cardinality bound)
+<<<<<<< HEAD
     enc, clauses, u_lits, top = _build(N, c, target)
+=======
+    enc, clauses, u_lits, top = _build(N, c, target, symmetry_breaking)
+>>>>>>> 9116161 (Add CPLEX-CP)
     solver = PySATSolver(name='cadical195', bootstrap_with=clauses)
 
     if not solver.solve():
@@ -455,7 +513,7 @@ def approach_71_binary(N, c, target):
         mid = (lo + hi) // 2
         calls += 1
 
-        enc2, cl2, ul2, top2 = _build(N, c, target)
+        enc2, cl2, ul2, top2 = _build(N, c, target, symmetry_breaking)
         am = CardEnc.atmost(ul2, bound=mid, top_id=top2,
                             encoding=EncType.seqcounter)
         s = PySATSolver(name='cadical195', bootstrap_with=cl2 + am.clauses)
@@ -478,7 +536,7 @@ def approach_71_binary(N, c, target):
     return matrix, opt, enc.top, len(enc.clauses)
 
 
-def approach_71_linear(N, c, target):
+def approach_71_linear(N, c, target, symmetry_breaking=False):
     """
     Section 7.1.2 — Linear search (top-down).
 
@@ -501,7 +559,11 @@ def approach_71_linear(N, c, target):
     t_start = time.perf_counter()
 
     # Check feasibility
+<<<<<<< HEAD
     enc, clauses, u_lits, top = _build(N, c, target)
+=======
+    enc, clauses, u_lits, top = _build(N, c, target, symmetry_breaking)
+>>>>>>> 9116161 (Add CPLEX-CP)
     solver = PySATSolver(name='cadical195', bootstrap_with=clauses)
 
     if not solver.solve():
@@ -519,7 +581,7 @@ def approach_71_linear(N, c, target):
     # Linear top-down search
     while True:
         calls += 1
-        enc2, cl2, ul2, top2 = _build(N, c, target)
+        enc2, cl2, ul2, top2 = _build(N, c, target, symmetry_breaking)
         am = CardEnc.atmost(ul2, bound=UB - 1, top_id=top2,
                             encoding=EncType.seqcounter)
         s = PySATSolver(name='cadical153', bootstrap_with=cl2 + am.clauses)
@@ -603,7 +665,7 @@ def _build_totalizer(solver, lits, top):
     return outputs, top
 
 
-def approach_72_incremental(N, c, target):
+def approach_72_incremental(N, c, target, symmetry_breaking=False):
     """
     Section 7.2.1 — Incremental SAT with assumption-based bound control.
 
@@ -635,7 +697,7 @@ def approach_72_incremental(N, c, target):
     t_start = time.perf_counter()
 
     # Build feasibility encoding + unit literals
-    enc, clauses, u_lits, top = _build(N, c, target)
+    enc, clauses, u_lits, top = _build(N, c, target, symmetry_breaking)
 
     # Create a single persistent solver
     solver = PySATSolver(name='cadical195', bootstrap_with=clauses)
@@ -689,7 +751,7 @@ def approach_72_incremental(N, c, target):
 #  Section 7.3: MaxSAT — partial weighted MaxSAT
 # ══════════════════════════════════════════════════════════════════════════
 
-def approach_73_maxsat(N, c, target):
+def approach_73_maxsat(N, c, target, symmetry_breaking=False):
     """
     Section 7.3.1 — Partial weighted MaxSAT via RC2.
 
@@ -712,7 +774,7 @@ def approach_73_maxsat(N, c, target):
     t_start = time.perf_counter()
 
     # Build feasibility encoding + unit literals
-    enc, clauses, u_lits, top = _build(N, c, target)
+    enc, clauses, u_lits, top = _build(N, c, target, symmetry_breaking)
 
     # Construct WCNF (weighted CNF)
     wcnf = WCNF()
@@ -768,19 +830,28 @@ def _worker(queue, fn, args):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(f"Usage: python {sys.argv[0]} <instance.json> [approach] [output.xlsx]")
+        print(f"Usage: python {sys.argv[0]} <instance.json> [approach] [sym] [output.xlsx]")
         print("  approach: 'binary' | 'linear' | 'incremental' | 'maxsat' | 'all' (default)")
+        print("  sym:      add 'sym' to enable symmetry-breaking constraints (Section 5.4)")
         sys.exit(1)
 
     path = sys.argv[1]
+<<<<<<< HEAD
     approach = sys.argv[2] if len(sys.argv) > 2 else "all"
     xlsx_path = sys.argv[3] if len(sys.argv) > 3 else "sat.xlsx"
+=======
+    extra = sys.argv[2:]
+    use_sym = "sym" in extra
+    approach = next((a for a in extra if a in ("binary", "linear", "incremental", "maxsat", "all")), "all")
+    xlsx_path = next((a for a in extra if a.endswith(".xlsx")), "sat.xlsx")
+>>>>>>> 9116161 (Add CPLEX-CP)
 
     import os
     instance_name = os.path.splitext(os.path.basename(path))[0]
 
     N, c, target = load_instance(path)
     print(f"Instance: N={N}, c={c}")
+    print(f"Symmetry breaking: {'ON' if use_sym else 'OFF'}")
     print_board(target, "Target")
 
     # ── Timeout configuration ──────────────────────────────────────────
@@ -818,6 +889,7 @@ if __name__ == "__main__":
         approach_results.append((sheet_name, matrix, opt, elapsed, num_vars, num_clauses))
 
     if approach in ("binary", "all"):
+<<<<<<< HEAD
         _run("Binary Search", approach_71_binary, N, c, target)
 
     if approach in ("linear", "all"):
@@ -828,6 +900,18 @@ if __name__ == "__main__":
 
     if approach in ("maxsat", "all"):
         _run("MaxSAT", approach_73_maxsat, N, c, target)
+=======
+        _run("Binary Search", approach_71_binary, N, c, target, use_sym)
+
+    if approach in ("linear", "all"):
+        _run("Linear Search", approach_71_linear, N, c, target, use_sym)
+
+    if approach in ("incremental", "all"):
+        _run("Incremental", approach_72_incremental, N, c, target, use_sym)
+
+    if approach in ("maxsat", "all"):
+        _run("MaxSAT", approach_73_maxsat, N, c, target, use_sym)
+>>>>>>> 9116161 (Add CPLEX-CP)
 
     # Summary
     if approach == "all" and approach_results:
