@@ -72,6 +72,37 @@ def verify_solution(N, c, target, X):
                 return False
     return True
 
+def target_symmetry_classes(target):
+    """Return (row_classes, col_classes, transpose_ok) = the automorphism group of T.
+
+    Permuting the rows of X by pi and the columns by tau gives
+        sigma'[r][k] = sigma[pi(r)][tau(k)],
+    so it maps a solution for target T to a solution for target T o (pi, tau).
+    That is a symmetry of the *problem family*, not of a concrete instance:
+    with T fixed, (pi, tau) is a symmetry only if it *stabilises T*.
+
+    Hence rows may only be permuted among identical target rows, columns among
+    identical target columns, and the transpose X -> X^T is available only when
+    T == T^T.  Ordering rows and columns simultaneously is sound because
+    permuting rows leaves every column sum unchanged and vice versa.
+
+    Only classes with >= 2 members are returned; singletons constrain nothing.
+    """
+    N = len(target)
+
+    def groups(keys):
+        out = {}
+        for idx, key in enumerate(keys):
+            out.setdefault(key, []).append(idx)
+        return [g for g in out.values() if len(g) > 1]
+
+    row_classes = groups([tuple(target[i]) for i in range(N)])
+    col_classes = groups([tuple(target[i][j] for i in range(N)) for j in range(N)])
+    transpose_ok = all(target[i][j] == target[j][i]
+                       for i in range(N) for j in range(i))
+    return row_classes, col_classes, transpose_ok
+
+
 class AlienTilesILP:
     def __init__(self, N, c, target=None):
         self.N = N
@@ -109,21 +140,45 @@ class AlienTilesILP:
                     name=f"mod_eq_{r}_{k}"
                 )
 
-    def _encode_symmetry_breaking(self) -> None:
+    def _encode_symmetry_breaking(self, free_target=False) -> None:
+        """Break the instance's genuine symmetry group.
+
+        free_target=False (variants 1/2): the target is given and fixed, so only
+        Aut(T) is a symmetry -- see target_symmetry_classes.
+
+        free_target=True (variant 3): T is itself a decision variable, so the
+        full N! x N! x 2 group applies -- permuting rows/columns of X maps one
+        feasible (X, T) pair to another, and the objective (total clicks) and
+        the non-triviality cut (sum T >= 1) are both permutation-invariant.
+        """
         N = self.N
-        for i in range(N - 1):
-            self.mdl.addConstr(
-                gp.quicksum(self.x_ij[i][j] for j in range(N))
-                <= gp.quicksum(self.x_ij[i + 1][j] for j in range(N)),
-                name=f"row_sym_{i}"
-            )
-        for j in range(N - 1):
-            self.mdl.addConstr(
-                gp.quicksum(self.x_ij[i][j] for i in range(N))
-                <= gp.quicksum(self.x_ij[i][j + 1] for i in range(N)),
-                name=f"col_sym_{j}"
-            )
-        self.mdl.addConstr(self.x_ij[0][1] <= self.x_ij[1][0], name="diag_sym")
+        if N < 2:
+            return
+
+        if free_target:
+            row_classes = [list(range(N))]
+            col_classes = [list(range(N))]
+            transpose_ok = True
+        else:
+            row_classes, col_classes, transpose_ok = \
+                target_symmetry_classes(self.target)
+
+        for cls in row_classes:
+            for a, b in zip(cls, cls[1:]):
+                self.mdl.addConstr(
+                    gp.quicksum(self.x_ij[a][j] for j in range(N))
+                    <= gp.quicksum(self.x_ij[b][j] for j in range(N)),
+                    name=f"row_sym_{a}_{b}"
+                )
+        for cls in col_classes:
+            for a, b in zip(cls, cls[1:]):
+                self.mdl.addConstr(
+                    gp.quicksum(self.x_ij[i][a] for i in range(N))
+                    <= gp.quicksum(self.x_ij[i][b] for i in range(N)),
+                    name=f"col_sym_{a}_{b}"
+                )
+        if transpose_ok:
+            self.mdl.addConstr(self.x_ij[0][1] <= self.x_ij[1][0], name="diag_sym")
 
     def build_variant1(self, symmetry_breaking=False):
         self._encode_variables()
@@ -156,7 +211,9 @@ class AlienTilesILP:
             name="non_trivial_target"
         )
         if symmetry_breaking:
-            self._encode_symmetry_breaking()
+            # T is a decision variable here, so the full row/column/transpose
+            # group is a genuine symmetry of the model.
+            self._encode_symmetry_breaking(free_target=True)
         self.mdl.setObjective(
             gp.quicksum(self.x_ij[i][j] for i in range(self.N) for j in range(self.N)),
             GRB.MAXIMIZE
@@ -174,16 +231,16 @@ class AlienTilesILP:
         return {"X": X, "T": T, "total_clicks": total}
 
 
-def _worker(queue, N, c, target, variant):
+def _worker(queue, N, c, target, variant, symmetry_breaking=False):
     """Build and solve in a child process; put (result, num_vars, num_constrs) in queue."""
     try:
         ilp = AlienTilesILP(N, c, target)
         if variant == 1:
-            ilp.build_variant1()
+            ilp.build_variant1(symmetry_breaking)
         elif variant == 2:
-            ilp.build_variant2()
+            ilp.build_variant2(symmetry_breaking)
         elif variant == 3:
-            ilp.build_variant3()
+            ilp.build_variant3(symmetry_breaking)
         ilp.mdl.update()
         num_vars = ilp.mdl.NumVars
         num_constrs = ilp.mdl.NumConstrs
@@ -197,13 +254,16 @@ if __name__ == "__main__":
     import os
 
     if len(sys.argv) < 2:
-        print(f"Usage: python {sys.argv[0]} <instance.json> [variant] [output.xlsx]")
+        print(f"Usage: python {sys.argv[0]} <instance.json> [variant] [sym] [output.xlsx]")
         print("  variant: 1 (feasibility) | 2 (min clicks) | 3 (hardest puzzle) | all (default)")
+        print("  sym:     add 'sym' to enable symmetry-breaking constraints")
         sys.exit(1)
 
     path = sys.argv[1]
-    variant_arg = sys.argv[2] if len(sys.argv) > 2 else "all"
-    xlsx_path = sys.argv[3] if len(sys.argv) > 3 else "sat.xlsx"
+    extra = sys.argv[2:]
+    use_sym = "sym" in extra
+    variant_arg = next((a for a in extra if a in ("1", "2", "3", "all")), "all")
+    xlsx_path = next((a for a in extra if a.endswith(".xlsx")), "sat.xlsx")
 
     TIMEOUT_SECONDS = 300  # seconds; change this value to adjust the limit
 
@@ -211,6 +271,7 @@ if __name__ == "__main__":
 
     N, c, target = load_instance(path)
     print(f"Instance: N={N}, c={c}")
+    print(f"Symmetry breaking: {'ON' if use_sym else 'OFF'}")
     print_board(target, "Target")
 
     variants = [1, 2, 3] if variant_arg == "all" else [int(variant_arg)]
@@ -220,7 +281,7 @@ if __name__ == "__main__":
         print(f"--- Variant {variant} ---")
 
         queue = Queue()
-        p = Process(target=_worker, args=(queue, N, c, target, variant))
+        p = Process(target=_worker, args=(queue, N, c, target, variant, use_sym))
         t0 = time.time()
         p.start()
         p.join(timeout=TIMEOUT_SECONDS)

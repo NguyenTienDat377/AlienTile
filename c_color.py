@@ -134,13 +134,13 @@ class AlienTilesEncoder:
                    for _ in range(N)]
 
         # Exclude invalid bit-patterns when c is not a power of 2
-        if c < (1 << b):
+        if c < 2 ** b:
             for i in range(N):
                 for j in range(N):
-                    for v in range(c, 1 << b):
+                    for v in range(c, 2 ** b):
                         clause = []
                         for l in range(b):
-                            if (v >> l) & 1:
+                            if (v // 2**l) % 2:
                                 clause.append(-self.p[i][j][l])
                             else:
                                 clause.append(self.p[i][j][l])
@@ -169,7 +169,7 @@ class AlienTilesEncoder:
                     # Forward: dv -> each bit matches w's pattern
                     backward = [dv]  # will become backward implication clause
                     for l in range(b):
-                        if (w >> l) & 1:
+                        if (w // 2**l) % 2:
                             self.clauses.append([-dv, self.p[i][j][l]])
                             backward.append(-self.p[i][j][l])
                         else:
@@ -315,50 +315,82 @@ class AlienTilesEncoder:
         """
         Section 5.4: Optional symmetry-breaking constraints.
 
-        Breaks the N! × N! × 2 symmetry group via three constraints:
-          (8) Row-sum ordering:    sum_j x_{1,j} ≤ ... ≤ sum_j x_{N,j}
-          (9) Column-sum ordering: sum_i x_{i,1} ≤ ... ≤ sum_i x_{i,N}
-          (10) Diagonal reflection: x_{1,2} ≤ x_{2,1}
+        IMPORTANT — why this is NOT the full N! x N! x 2 group.
+
+        Permuting the rows of X by pi and the columns by tau gives
+            sigma'[r][k] = sigma[pi(r)][tau(k)],
+        i.e. it maps a solution for target T to a solution for target
+        T o (pi, tau).  That is a symmetry of the *problem family*, not of a
+        concrete instance: once T is fixed, (pi, tau) is only a symmetry if it
+        *stabilises T*.  Imposing the unrestricted ordering therefore discards
+        genuine solutions and can turn a feasible instance UNSAT.
+
+        So we break exactly Aut(T):
+          - rows may only be permuted among *identical target rows*
+          - columns may only be permuted among *identical target columns*
+          - the transpose X -> X^T is a symmetry only when T == T^T
+
+        Soundness of doing rows and columns simultaneously: permuting rows of X
+        leaves every *column* sum unchanged (a column keeps the same multiset of
+        entries), and permuting columns leaves every *row* sum unchanged.  The
+        two sorting operations are independent, so a canonical representative
+        satisfying both orderings always exists.
+
+          (8) Row-sum ordering, within each class of identical target rows
+          (9) Column-sum ordering, within each class of identical target columns
+          (10) Diagonal reflection x_{1,2} <= x_{2,1}, only if T is symmetric
 
         For (8)/(9): build a totalizer over each row/column's unit literals,
-        then add output[i][k] → output[i+1][k] for every threshold k.
+        then add output[i][k] -> output[i'][k] for every threshold k, where
+        i, i' are consecutive members of the same class.
 
-        For (10): u[i][j][v] = (x_{i,j} ≥ v), so x_{1,2} ≤ x_{2,1} is
-        exactly u[0][1][v] → u[1][0][v] for each v in {1,...,c-1}.
+        For (10): u[i][j][v] = (x_{i,j} >= v), so x_{1,2} <= x_{2,1} is
+        exactly u[0][1][v] -> u[1][0][v] for each v in {1,...,c-1}.
         """
-        N, c = self.N, self.c
+        N, c, T = self.N, self.c, self.target
         if N < 2:
             return
 
-        # (8) Row-sum ordering
-        row_outputs = []
-        for i in range(N):
-            row_lits = [self._u[i][j][v]
-                        for j in range(N) for v in range(1, c)]
-            row_outputs.append(self._local_totalizer(row_lits))
+        def _classes(keys):
+            """Group indices by equal key, preserving index order within a group."""
+            groups = {}
+            for idx, key in enumerate(keys):
+                groups.setdefault(key, []).append(idx)
+            return [g for g in groups.values() if len(g) > 1]
 
-        for i in range(N - 1):
-            n = min(len(row_outputs[i]), len(row_outputs[i + 1]))
-            for k in range(n):
-                # row_sum[i] >= k+1  =>  row_sum[i+1] >= k+1
-                self.clauses.append([-row_outputs[i][k], row_outputs[i + 1][k]])
+        def _chain(outputs, members):
+            """Assert sum(members[0]) <= sum(members[1]) <= ... via totalizer outputs."""
+            for a, b in zip(members, members[1:]):
+                n = min(len(outputs[a]), len(outputs[b]))
+                for k in range(n):
+                    # sum[a] >= k+1  =>  sum[b] >= k+1
+                    self.clauses.append([-outputs[a][k], outputs[b][k]])
 
-        # (9) Column-sum ordering
-        col_outputs = []
-        for j in range(N):
-            col_lits = [self._u[i][j][v]
-                        for i in range(N) for v in range(1, c)]
-            col_outputs.append(self._local_totalizer(col_lits))
+        # (8) Row-sum ordering, restricted to classes of identical target rows.
+        # Totalizers are built lazily: a row in no non-trivial class needs none.
+        row_classes = _classes([tuple(T[i]) for i in range(N)])
+        row_outputs = {}
+        for cls in row_classes:
+            for i in cls:
+                row_outputs[i] = self._local_totalizer(
+                    [self._u[i][j][v] for j in range(N) for v in range(1, c)])
+            _chain(row_outputs, cls)
 
-        for j in range(N - 1):
-            n = min(len(col_outputs[j]), len(col_outputs[j + 1]))
-            for k in range(n):
-                # col_sum[j] >= k+1  =>  col_sum[j+1] >= k+1
-                self.clauses.append([-col_outputs[j][k], col_outputs[j + 1][k]])
+        # (9) Column-sum ordering, restricted to classes of identical target columns
+        col_classes = _classes([tuple(T[i][j] for i in range(N)) for j in range(N)])
+        col_outputs = {}
+        for cls in col_classes:
+            for j in cls:
+                col_outputs[j] = self._local_totalizer(
+                    [self._u[i][j][v] for i in range(N) for v in range(1, c)])
+            _chain(col_outputs, cls)
 
-        # (10) Diagonal reflection: x_{1,2} <= x_{2,1}  (0-indexed: [0][1] vs [1][0])
-        for v in range(1, c):
-            self.clauses.append([-self._u[0][1][v], self._u[1][0][v]])
+        # (10) Diagonal reflection: x_{1,2} <= x_{2,1}  (0-indexed: [0][1] vs [1][0]).
+        # X -> X^T maps a solution for T to a solution for T^T, so this is only
+        # a symmetry of the instance when T is its own transpose.
+        if all(T[i][j] == T[j][i] for i in range(N) for j in range(i)):
+            for v in range(1, c):
+                self.clauses.append([-self._u[0][1][v], self._u[1][0][v]])
 
     # ── Section 7: Unit-contribution literals for objective ──────────
 
@@ -395,7 +427,7 @@ class AlienTilesEncoder:
         for i in range(N):
             row = []
             for j in range(N):
-                val = sum((1 << l) for l in range(b)
+                val = sum(2**l for l in range(b)
                           if self.p[i][j][l] in model_set)
                 row.append(val)
                 total += val
@@ -842,7 +874,7 @@ if __name__ == "__main__":
     print_board(target, "Target")
 
     # ── Timeout configuration ──────────────────────────────────────────
-    TIMEOUT_SECONDS = 300  # seconds; change this value to adjust the limit
+    TIMEOUT_SECONDS = 600  # seconds; change this value to adjust the limit
 
     # Each entry: (sheet_name, matrix, opt, elapsed, num_vars, num_clauses)
     approach_results = []
