@@ -1,0 +1,23 @@
+{
+    "name": "4x4_c3_hardest_gent2000",
+    "description": "Target derived from the 10-click representative reported by Gent, Linton and Smith (2000), p. 5",
+    "source": {
+        "citation": "Gent, Linton and Smith (2000), APES-22-2000, p. 5",
+        "derivation": "target = effect(witness_clicks) mod 3"
+    },
+    "N": 4,
+    "c": 3,
+    "target": [
+        [2, 2, 2, 1],
+        [1, 1, 0, 2],
+        [1, 0, 1, 2],
+        [0, 1, 1, 2]
+    ],
+    "known_optimum": 10,
+    "witness_clicks": [
+        [0, 0, 0, 0],
+        [0, 0, 1, 1],
+        [0, 1, 0, 1],
+        [2, 1, 1, 2]
+    ]
+}

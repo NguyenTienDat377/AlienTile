@@ -1,0 +1,162 @@
+{
+  "schema_version": "2.0",
+  "generator_version": "2.1",
+  "config": {
+    "sizes": [
+      4,
+      5,
+      6,
+      8,
+      10,
+      12
+    ],
+    "colours": [
+      2,
+      3,
+      4
+    ],
+    "families": [
+      "witness",
+      "uniform"
+    ],
+    "witness_densities": [
+      0.1,
+      0.3,
+      0.6
+    ],
+    "requested_witness_instances": 60,
+    "requested_uniform_instances": 6,
+    "master_seed": 270027,
+    "tier_policy": {
+      "score": "N^2 * (c - 1)",
+      "assignment": "balanced thirds after sorting (N,c) by score",
+      "pairs": [
+        {
+          "N": 4,
+          "c": 2,
+          "score": 16,
+          "size_tier": "easy"
+        },
+        {
+          "N": 5,
+          "c": 2,
+          "score": 25,
+          "size_tier": "easy"
+        },
+        {
+          "N": 4,
+          "c": 3,
+          "score": 32,
+          "size_tier": "easy"
+        },
+        {
+          "N": 6,
+          "c": 2,
+          "score": 36,
+          "size_tier": "easy"
+        },
+        {
+          "N": 4,
+          "c": 4,
+          "score": 48,
+          "size_tier": "easy"
+        },
+        {
+          "N": 5,
+          "c": 3,
+          "score": 50,
+          "size_tier": "easy"
+        },
+        {
+          "N": 8,
+          "c": 2,
+          "score": 64,
+          "size_tier": "medium"
+        },
+        {
+          "N": 6,
+          "c": 3,
+          "score": 72,
+          "size_tier": "medium"
+        },
+        {
+          "N": 5,
+          "c": 4,
+          "score": 75,
+          "size_tier": "medium"
+        },
+        {
+          "N": 10,
+          "c": 2,
+          "score": 100,
+          "size_tier": "medium"
+        },
+        {
+          "N": 6,
+          "c": 4,
+          "score": 108,
+          "size_tier": "medium"
+        },
+        {
+          "N": 8,
+          "c": 3,
+          "score": 128,
+          "size_tier": "medium"
+        },
+        {
+          "N": 12,
+          "c": 2,
+          "score": 144,
+          "size_tier": "hard"
+        },
+        {
+          "N": 8,
+          "c": 4,
+          "score": 192,
+          "size_tier": "hard"
+        },
+        {
+          "N": 10,
+          "c": 3,
+          "score": 200,
+          "size_tier": "hard"
+        },
+        {
+          "N": 12,
+          "c": 3,
+          "score": 288,
+          "size_tier": "hard"
+        },
+        {
+          "N": 10,
+          "c": 4,
+          "score": 300,
+          "size_tier": "hard"
+        },
+        {
+          "N": 12,
+          "c": 4,
+          "score": 432,
+          "size_tier": "hard"
+        }
+      ]
+    }
+  },
+  "counts": {
+    "total": 66,
+    "by_size_tier": {
+      "easy": 22,
+      "hard": 22,
+      "medium": 22
+    },
+    "by_family": {
+      "uniform": 6,
+      "witness": 60
+    }
+  },
+  "labelling_policy": {
+    "witness_total_is": "known_upper_bound_only",
+    "known_optimum_is_written_only_after_exact_proof": true,
+    "uniform_target_status_at_generation": "unclassified"
+  }
+}

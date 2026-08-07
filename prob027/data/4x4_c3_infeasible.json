@@ -1,0 +1,32 @@
+{
+    "name": "4x4_c3_infeasible",
+    "description": "4×4 grid, 3 colours, infeasible target (expected UNSAT)",
+    "N": 4,
+    "c": 3,
+    "target": [
+        [
+            2,
+            1,
+            0,
+            2
+        ],
+        [
+            1,
+            0,
+            2,
+            1
+        ],
+        [
+            0,
+            2,
+            1,
+            0
+        ],
+        [
+            2,
+            1,
+            0,
+            2
+        ]
+    ]
+}

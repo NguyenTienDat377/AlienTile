@@ -1,0 +1,956 @@
+% Biên dịch: latexmk -lualatex -interaction=nonstopmode -halt-on-error main.tex
+\documentclass[11pt,a4paper]{article}
+\usepackage{fontspec}
+\usepackage[main=vietnamese,english]{babel}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{libertinus}
+\usepackage{booktabs,tabularx,array}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{matrix,positioning,calc,arrows.meta}
+\usepackage[most]{tcolorbox}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage[a4paper,margin=25mm,headheight=15pt]{geometry}
+\usepackage{xcolor}
+\usepackage{xurl}
+\usepackage{hyperref}
+\usepackage[nameinlink,noabbrev]{cleveref}
+\usepackage{fancyhdr}
+
+\definecolor{AlienNavy}{HTML}{17324D}
+\definecolor{AlienTeal}{HTML}{148A8A}
+\definecolor{AlienMint}{HTML}{E7F5F2}
+\definecolor{AlienGold}{HTML}{D99A2B}
+\definecolor{AlienRed}{HTML}{B54747}
+\definecolor{AlienGray}{HTML}{F3F5F7}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=AlienNavy,
+  citecolor=AlienTeal,
+  urlcolor=AlienTeal,
+  pdftitle={Alien Tiles - Tối thiểu hóa số lần click},
+  pdfsubject={Mô tả bài toán, mô hình ILP, mô hình SAT và dữ liệu},
+  pdfauthor={Tài liệu nghiên cứu prob027}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{AlienNavy}\textsc{CSPLib prob027}}
+\fancyhead[R]{\small\color{AlienNavy}Tối thiểu hóa số lần click}
+\fancyfoot[C]{\small\color{AlienNavy}Trang \thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\setcounter{tocdepth}{2}
+\setlist[itemize]{leftmargin=*,itemsep=3pt,topsep=4pt}
+\setlist[enumerate]{leftmargin=*,itemsep=5pt,topsep=4pt}
+\renewcommand{\arraystretch}{1.18}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt}
+
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\I}{\mathcal{I}}
+\newcommand{\AtMost}{\operatorname{AtMost}}
+\crefname{equation}{phương trình}{các phương trình}
+\crefname{table}{bảng}{các bảng}
+\crefname{section}{mục}{các mục}
+\crefname{subsection}{mục}{các mục}
+
+\newtcolorbox{summarybox}[1][]{
+  enhanced,breakable,colback=AlienMint,colframe=AlienTeal,
+  boxrule=0.7pt,arc=2mm,left=4mm,right=4mm,top=3mm,bottom=3mm,
+  fonttitle=\bfseries,title={#1}
+}
+\newtcolorbox{examplebox}[1][]{
+  enhanced,breakable,colback=AlienGray,colframe=AlienNavy,
+  boxrule=0.7pt,arc=2mm,left=4mm,right=4mm,top=3mm,bottom=3mm,
+  fonttitle=\bfseries,title={#1}
+}
+\newtcolorbox{notebox}[1][]{
+  enhanced,breakable,colback=AlienGold!8,colframe=AlienGold!85!black,
+  boxrule=0.7pt,arc=2mm,left=4mm,right=4mm,top=3mm,bottom=3mm,
+  fonttitle=\bfseries,title={#1}
+}
+\lstdefinestyle{jsonstyle}{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{AlienGray},
+  frame=single,
+  rulecolor=\color{AlienNavy!35},
+  numbers=none,
+  showstringspaces=false,
+  breaklines=true,
+  columns=fullflexible,
+  stringstyle=\color{AlienRed}
+}
+
+\begin{document}
+\hypersetup{pageanchor=false}
+\begin{titlepage}
+  \thispagestyle{empty}
+  \begin{tikzpicture}[remember picture,overlay]
+    \fill[AlienNavy] (current page.north west)
+      rectangle ([yshift=-50mm]current page.north east);
+    \fill[AlienTeal] ([yshift=-47mm]current page.north west)
+      rectangle ([yshift=-50mm]current page.north east);
+    \node[anchor=north west,text=white]
+      at ([xshift=25mm,yshift=-10mm]current page.north west)
+      {\Large\textsc{Tài liệu mô hình hóa}};
+    \node[anchor=north west,text=white]
+      at ([xshift=25mm,yshift=-22mm]current page.north west)
+      {\fontsize{29}{34}\selectfont\bfseries The Alien Tiles Problem};
+    \node[anchor=north west,text=white]
+      at ([xshift=25mm,yshift=-39mm]current page.north west)
+      {\Large CSPLib Problem 027};
+  \end{tikzpicture}
+
+  \vspace*{75mm}
+  \begin{center}
+  \begin{tikzpicture}[
+    tile/.style={draw=AlienNavy,line width=.7pt,minimum size=9mm,
+                 font=\bfseries\small,text=AlienNavy}]
+    \matrix (g) [matrix of nodes,nodes={tile},
+      row sep=-\pgflinewidth,column sep=-\pgflinewidth] {
+      |[fill=AlienMint]| 1 & |[fill=AlienMint]| 1 & |[fill=AlienMint]| 1 & |[fill=AlienGold!25]| 0 \\
+      |[fill=AlienMint]| 1 & |[fill=white]| 0 & |[fill=white]| 0 & |[fill=AlienTeal!22]| 2 \\
+      |[fill=AlienGold!25]| 0 & |[fill=AlienTeal!22]| 2 & |[fill=AlienTeal!22]| 2 & |[fill=AlienTeal!22]| 2 \\
+      |[fill=AlienMint]| 1 & |[fill=white]| 0 & |[fill=white]| 0 & |[fill=AlienTeal!22]| 2 \\
+    };
+  \end{tikzpicture}
+  \end{center}
+
+  \vfill
+  \begin{tcolorbox}[
+    colback=white,colframe=AlienNavy,boxrule=0pt,
+    borderline west={3pt}{0pt}{AlienTeal},arc=0pt]
+    \Large\bfseries Bài toán tìm lời giải có tổng số lần click nhỏ nhất\\[2mm]
+    \large Ví dụ trực quan, mô hình ILP, mô hình SAT và dữ liệu
+  \end{tcolorbox}
+  \vspace{7mm}
+  {\large Ngày cập nhật: 21 tháng 7 năm 2026\par}
+\end{titlepage}
+\hypersetup{pageanchor=true}
+
+\pagenumbering{roman}
+\begin{abstract}
+Tài liệu chỉ xét một mục tiêu: với trạng thái đích đã cho, tìm cách click
+có tổng số lần click nhỏ nhất. Trạng thái ban đầu được lấy là lưới toàn 0,
+đúng theo quy ước của CSPLib prob027. Trước tiên, một ví dụ
+$4\times4$ với ba màu được giải từng bước. Sau đó cùng ví dụ này được dùng
+để giải thích mô hình quy hoạch tuyến tính nguyên (ILP) và mô hình SAT có
+cận chi phí. Phần cuối thiết kế một quy trình sinh benchmark tái lập, mô tả
+các file dữ liệu trong dự án và dẫn nguồn paper/web.
+\end{abstract}
+
+\begin{summarybox}[Bài toán trong một câu]
+\textbf{Đầu vào:} kích thước $N$, số màu $c$ và target $T$.\\
+\textbf{Đầu ra:} số lần click $x_{ij}$ tại mỗi ô.\\
+\textbf{Mục tiêu duy nhất:}
+\[
+  \min \sum_{i=1}^{N}\sum_{j=1}^{N}x_{ij},
+\]
+với điều kiện các click phải biến lưới ban đầu toàn 0 thành đúng target
+$T$.
+\end{summarybox}
+
+\begingroup
+\small
+\setlength{\parskip}{0pt}
+\tableofcontents
+\endgroup
+\clearpage
+\pagenumbering{arabic}
+
+\section{Luật chơi và dữ liệu đầu vào}\label{sec:problem}
+
+Ta có một lưới vuông $N\times N$. Mỗi ô nhận một số trong
+\[
+  \{0,1,\ldots,c-1\}.
+\]
+Các số này đại diện cho $c$ màu nằm trên một vòng tròn. Sau màu $c-1$ ta
+quay lại màu 0.
+
+Khi click ô $(i,j)$ một lần:
+\begin{itemize}
+  \item mọi ô trên hàng $i$ tăng thêm 1;
+  \item mọi ô trên cột $j$ tăng thêm 1;
+  \item ô $(i,j)$ cũng chỉ tăng 1, không phải tăng 2;
+  \item tất cả phép tăng đều được lấy modulo $c$.
+\end{itemize}
+
+Ví dụ với $c=3$, màu thay đổi theo chu trình
+\[
+  0\longrightarrow1\longrightarrow2\longrightarrow0.
+\]
+
+Thứ tự click không quan trọng. Vì vậy, thay vì lưu một chuỗi thao tác, ta
+chỉ cần lưu
+\[
+  x_{ij}=\text{số lần click ô }(i,j).
+\]
+Do click $c$ lần tại cùng một ô không tạo thay đổi ròng, chỉ cần xét
+\[
+  x_{ij}\in\{0,1,\ldots,c-1\}.
+\]
+Các tính chất này xuất phát trực tiếp từ đặc tả CSPLib
+\cite{csplib027,gent2000symmetry}.
+
+\subsection{Dạng instance dùng trong tài liệu}
+
+Một instance gồm ba thành phần:
+\[
+  (N,c,T),
+\]
+trong đó $T=(t_{rk})$ là ma trận target. Trạng thái đầu là ma trận toàn 0.
+Nếu cần trạng thái đầu $S$ khác 0, có thể thay target bằng
+\[
+  d_{rk}=(t_{rk}-s_{rk})\bmod c
+\]
+rồi giải như trường hợp bắt đầu từ 0.
+
+\section{Ví dụ xuyên suốt: optimum bằng 3 click}\label{sec:example}
+
+Xét lưới $4\times4$, $c=3$ và target
+\begin{equation}\label{eq:example-target}
+T=
+\begin{bmatrix}
+1&1&1&0\\
+1&0&0&2\\
+0&2&2&2\\
+1&0&0&2
+\end{bmatrix}.
+\end{equation}
+
+Một lời giải là:
+\begin{itemize}
+  \item click ô $(1,1)$ đúng 1 lần;
+  \item click ô $(3,4)$ đúng 2 lần;
+  \item không click các ô còn lại.
+\end{itemize}
+
+Ma trận click tương ứng là
+\begin{equation}\label{eq:example-x}
+X=
+\begin{bmatrix}
+1&0&0&0\\
+0&0&0&0\\
+0&0&0&2\\
+0&0&0&0
+\end{bmatrix}.
+\end{equation}
+
+\begin{examplebox}[Kiểm tra một vài ô]
+\textbf{Ô $(1,2)$:} cùng hàng với $(1,1)$ nên nhận 1; không cùng hàng/cột
+với $(3,4)$. Kết quả là 1.
+
+\textbf{Ô $(2,4)$:} cùng cột với $(3,4)$ nên nhận 2. Kết quả là 2.
+
+\textbf{Ô $(1,4)$:} nhận 1 từ $(1,1)$ và nhận 2 từ $(3,4)$:
+\[
+  (1+2)\bmod3=0.
+\]
+
+\textbf{Ô $(3,1)$:} nhận 2 từ $(3,4)$ và nhận 1 từ $(1,1)$:
+\[
+  (2+1)\bmod3=0.
+\]
+Các giá trị này khớp với target trong \cref{eq:example-target}.
+\end{examplebox}
+
+Tổng số click của \cref{eq:example-x} là
+\[
+  1+2=3.
+\]
+Đây chưa đủ để kết luận optimum bằng 3: ta còn phải chứng minh không có lời
+giải nào dùng 0, 1 hoặc 2 click. Bộ giải SAT đi kèm đã kiểm tra các cận này:
+
+\begin{center}
+\begin{tikzpicture}[
+  node distance=5mm,
+  trial/.style={draw=AlienNavy,rounded corners,minimum width=28mm,
+                minimum height=9mm,align=center},
+  arrow/.style={-{Latex[length=2mm]},AlienTeal,thick}]
+  \node[trial,fill=AlienRed!8] (k0) {$K=0$\\UNSAT};
+  \node[trial,fill=AlienRed!8,right=of k0] (k1) {$K=1$\\UNSAT};
+  \node[trial,fill=AlienRed!8,right=of k1] (k2) {$K=2$\\UNSAT};
+  \node[trial,fill=AlienMint,right=of k2] (k3) {$K=3$\\SAT};
+  \draw[arrow] (k0)--(k1);
+  \draw[arrow] (k1)--(k2);
+  \draw[arrow] (k2)--(k3);
+\end{tikzpicture}
+\end{center}
+
+Do đó giá trị đầu tiên có lời giải là $K=3$, nên optimum bằng 3.
+
+\begin{notebox}[Tại sao phải tối thiểu hóa?]
+Một target có thể có nhiều ma trận click khác nhau. Chẳng hạn, với
+$N=4,c=3$, click mỗi ô hàng 1 một lần và mỗi ô hàng 2 hai lần sẽ không làm
+thay đổi lưới sau khi lấy modulo 3. Target toàn 0 vì vậy có cả lời giải
+0 click và một lời giải 12 click. Hàm mục tiêu phải chọn lời giải 0 click.
+\end{notebox}
+
+\section{Mô hình toán học chung}\label{sec:math}
+
+Đặt tập chỉ số $\I=\{1,\ldots,N\}$. Biến quyết định là
+\[
+  x_{ij}\in\{0,1,\ldots,c-1\},
+  \qquad i,j\in\I.
+\]
+
+Xét ô target $(r,k)$. Tổng số lần ô này bị tác động là
+\begin{equation}\label{eq:raw-effect}
+  a_{rk}
+  =
+  \sum_{j\in\I}x_{rj}
+  +
+  \sum_{i\in\I}x_{ik}
+  -
+  x_{rk}.
+\end{equation}
+
+Cách đọc công thức:
+\begin{enumerate}
+  \item tổng thứ nhất đếm mọi click trên hàng $r$;
+  \item tổng thứ hai đếm mọi click trên cột $k$;
+  \item $x_{rk}$ bị đếm hai lần, nên phải trừ đi một lần.
+\end{enumerate}
+
+Để ô $(r,k)$ có đúng màu target $t_{rk}$, ta cần
+\begin{equation}\label{eq:mod-constraint}
+  a_{rk}\bmod c=t_{rk},
+  \qquad \forall r,k\in\I.
+\end{equation}
+
+\begin{summarybox}[Mô hình tối ưu ở dạng modulo]
+\begin{align}
+  \min\quad
+  &\sum_{i\in\I}\sum_{j\in\I}x_{ij}
+  \label{eq:objective}\\
+  \text{s.t.}\quad
+  &\left(
+    \sum_{j\in\I}x_{rj}
+    +\sum_{i\in\I}x_{ik}
+    -x_{rk}
+  \right)\bmod c=t_{rk},
+  &&\forall r,k\in\I,
+  \label{eq:model-mod}\\
+  &x_{ij}\in\{0,1,\ldots,c-1\},
+  &&\forall i,j\in\I.
+  \label{eq:model-domain}
+\end{align}
+\end{summarybox}
+
+\Cref{eq:objective} là hàm mục tiêu duy nhất của tài liệu: tổng số click
+càng nhỏ càng tốt. \Cref{eq:model-mod} bảo đảm lời giải tạo đúng target.
+
+\section{Mô hình ILP}\label{sec:ilp}
+
+ILP không dùng trực tiếp toán tử modulo. Ta thay mỗi điều kiện
+\[
+  a_{rk}\bmod c=t_{rk}
+\]
+bằng một phương trình nguyên
+\begin{equation}\label{eq:quotient}
+  a_{rk}-c q_{rk}=t_{rk}.
+\end{equation}
+
+$q_{rk}$ chỉ là phần thương khi chia $a_{rk}$ cho $c$; nó không phải số
+lần click. Từ
+\[
+  0\le a_{rk}\le(2N-1)(c-1),
+\]
+ta có thể dùng cận an toàn
+\[
+  0\le q_{rk}\le
+  \left\lfloor\frac{(2N-1)(c-1)}{c}\right\rfloor.
+\]
+
+\subsection{Mô hình đầy đủ}
+\begin{summarybox}[ILP tối thiểu hóa số lần click]
+\begin{align}
+  \min\quad
+  &\sum_{i\in\I}\sum_{j\in\I}x_{ij}
+  \label{eq:ilp-objective}\\
+  \text{s.t.}\quad
+  &\sum_{j\in\I}x_{rj}
+   +\sum_{i\in\I}x_{ik}
+   -x_{rk}
+   -c q_{rk}
+   =t_{rk},
+   &&\forall r,k\in\I,
+  \label{eq:ilp-effect}\\
+  &x_{ij}\in\Z,\quad 0\le x_{ij}\le c-1,
+   &&\forall i,j\in\I,
+  \label{eq:ilp-x}\\
+  &q_{rk}\in\Z,\quad
+   0\le q_{rk}\le
+   \left\lfloor\frac{(2N-1)(c-1)}{c}\right\rfloor,
+   &&\forall r,k\in\I.
+  \label{eq:ilp-q}
+\end{align}
+\end{summarybox}
+
+Mô hình có $N^2$ biến click $x$ và $N^2$ biến phụ $q$. Có đúng $N^2$
+phương trình tác động, mỗi phương trình ứng với một ô target. Đây là dạng
+tổng quát của mô hình IP tối thiểu số click được Chlond trình bày cho Alien
+Tiles $7\times7$ với bốn màu \cite{chlond2006alien}.
+
+\subsection{Đọc biến phụ q bằng ví dụ}
+Quay lại target ở \cref{eq:example-target}.
+
+\textbf{Tại ô $(1,4)$:}
+\[
+\underbrace{\sum_jx_{1j}}_{=1}
++
+\underbrace{\sum_ix_{i4}}_{=2}
+-
+\underbrace{x_{14}}_{=0}
+-3q_{14}
+=
+\underbrace{t_{14}}_{=0}.
+\]
+Vế tác động trước modulo là 3, nên $q_{14}=1$ và $3-3\cdot1=0$.
+
+\textbf{Tại ô $(1,1)$:}
+\[
+\underbrace{\sum_jx_{1j}}_{=1}
++
+\underbrace{\sum_ix_{i1}}_{=1}
+-
+\underbrace{x_{11}}_{=1}
+-3q_{11}
+=
+\underbrace{t_{11}}_{=1}.
+\]
+Ở đây tác động đã bằng target, nên $q_{11}=0$. Hai phép tính này cho thấy
+$q$ chỉ giúp ILP bỏ đi một số bội của $c$.
+
+\section{Mô hình SAT}\label{sec:sat}
+
+SAT cơ bản chỉ trả lời có hoặc không. Vì vậy ta đưa vào một cận $K$ và hỏi:
+
+\begin{quote}
+\emph{Có tồn tại lời giải tạo đúng target và dùng tổng cộng không quá
+$K$ click hay không?}
+\end{quote}
+
+Gọi công thức này là $\Phi_K$. Giá trị tối ưu là cận $K$ nhỏ nhất làm
+$\Phi_K$ khả thỏa.
+
+\subsection{Bước 1: mã hóa số lần click ở mỗi ô}
+
+Với mỗi ô $(i,j)$ và mỗi $v\in\{0,\ldots,c-1\}$, tạo biến Boolean
+\[
+  d_{ijv}=1
+  \quad\Longleftrightarrow\quad
+  x_{ij}=v.
+\]
+
+Ví dụ, khi $c=3$, ô $(i,j)$ có ba biến
+\[
+  d_{ij0},\quad d_{ij1},\quad d_{ij2}.
+\]
+Đúng một trong ba biến phải nhận true. Mã hóa CNF theo cặp là
+
+\begin{align}
+  &d_{ij0}\lor d_{ij1}\lor\cdots\lor d_{ij,c-1},
+  \label{eq:sat-atleast}\\
+  &\lnot d_{ija}\lor\lnot d_{ijb},
+  \qquad 0\le a<b<c.
+  \label{eq:sat-atmost}
+\end{align}
+
+\Cref{eq:sat-atleast} nói rằng phải chọn ít nhất một giá trị.
+\Cref{eq:sat-atmost} cấm chọn đồng thời hai giá trị.
+
+\subsection{Bước 2: cộng các click theo modulo}
+
+Đối với ô target $(r,k)$, liệt kê $L=2N-1$ biến click tác động lên nó:
+\[
+P_{rk}=
+(x_{r1},\ldots,x_{rN},
+x_{1k},\ldots,x_{r-1,k},x_{r+1,k},\ldots,x_{Nk}).
+\]
+Biến $x_{rk}$ chỉ xuất hiện một lần trong danh sách.
+
+Tạo biến Boolean
+\[
+  s_{rk,\ell,a}=1
+\]
+với ý nghĩa: sau khi cộng $\ell$ phần tử đầu của $P_{rk}$, phần dư hiện tại
+là $a$. Tại mỗi bước $\ell$, đúng một trong
+\[
+  s_{rk,\ell,0},\ldots,s_{rk,\ell,c-1}
+\]
+được chọn.
+
+Trạng thái đầu là phần dư 0:
+\begin{equation}\label{eq:sat-start}
+  s_{rk,0,0}.
+\end{equation}
+
+Giả sử phần dư cũ là $a$ và click tiếp theo có giá trị $b$. Phần dư mới
+phải là $(a+b)\bmod c$. Nếu click tiếp theo là $x_{uv}$, clause chuyển là
+
+\begin{equation}\label{eq:sat-transition}
+  \lnot s_{rk,\ell-1,a}
+  \lor
+  \lnot d_{uvb}
+  \lor
+  s_{rk,\ell,(a+b)\bmod c}.
+\end{equation}
+
+Với $c=3$, quy tắc chuyển có thể đọc trực tiếp từ bảng:
+
+\begin{table}[htbp]
+\centering
+\caption{Phần dư mới $(a+b)\bmod3$.}
+\label{tab:mod3}
+\begin{tabular}{c|ccc}
+\toprule
+$a\backslash b$ & 0 & 1 & 2\\
+\midrule
+0 & 0 & 1 & 2\\
+1 & 1 & 2 & 0\\
+2 & 2 & 0 & 1\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Sau $L$ bước, phần dư phải bằng target:
+
+\begin{equation}\label{eq:sat-finish}
+  s_{rk,L,t_{rk}},
+  \qquad \forall r,k\in\I.
+\end{equation}
+
+\subsection{Bước 3: mã hóa cận tổng số click}
+
+Ta cần chuyển giá trị $x_{ij}$ thành các đóng góp đơn vị. Với mỗi
+$h=1,\ldots,c-1$, tạo
+
+\begin{equation}\label{eq:unit-literal}
+  u_{ijh}=1
+  \quad\Longleftrightarrow\quad
+  x_{ij}\ge h.
+\end{equation}
+
+Liên kết với các biến one-hot ở bước 1 bằng
+\begin{equation}\label{eq:unit-channel}
+  u_{ijh}
+  \quad\Longleftrightarrow\quad
+  \bigvee_{v=h}^{c-1}d_{ijv}.
+\end{equation}
+
+Với $c=3$, ta có bảng minh họa:
+
+\begin{center}
+\begin{tabular}{c|cc|c}
+\toprule
+$x_{ij}$ & $u_{ij1}$ & $u_{ij2}$ & Tổng đóng góp\\
+\midrule
+0 & 0 & 0 & 0\\
+1 & 1 & 0 & 1\\
+2 & 1 & 1 & 2\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Do đó
+\begin{equation}\label{eq:unit-sum}
+  \sum_{i,j}x_{ij}
+  =
+  \sum_{i,j}\sum_{h=1}^{c-1}u_{ijh}.
+\end{equation}
+
+Cận tổng số click không quá $K$ trở thành cardinality constraint
+
+\begin{equation}\label{eq:sat-bound}
+  \AtMost\bigl(\{u_{ijh}\},K\bigr).
+\end{equation}
+
+Ràng buộc \cref{eq:sat-bound} có thể chuyển sang CNF bằng sequential
+counter \cite{sinz2005towards}. Công thức SAT đầy đủ $\Phi_K$ gồm:
+
+\begin{enumerate}
+  \item exactly-one cho các biến $d$;
+  \item các trạng thái cộng modulo và clause chuyển;
+  \item trạng thái cuối bằng target;
+  \item cardinality constraint tổng số click không quá $K$.
+\end{enumerate}
+
+\subsection{Tìm giá trị tối ưu}
+
+Cách dễ hiểu nhất là thử $K=0,1,2,\ldots$ cho đến khi SAT. Với ví dụ xuyên
+suốt:
+
+\[
+\begin{array}{c|cccc}
+K&0&1&2&3\\
+\hline
+\Phi_K&\text{UNSAT}&\text{UNSAT}&\text{UNSAT}&\text{SAT}
+\end{array}
+\]
+
+Vì $K=3$ là cận nhỏ nhất khả thỏa, lời giải có tổng click bằng 3 là tối ưu.
+Khi miền cận lớn, có thể dùng tìm kiếm nhị phân hoặc giữ một solver SAT
+incremental để tái sử dụng các clause đã học.
+
+\section{Dataset và nguồn tham khảo}\label{sec:data}
+
+\subsection{Nguồn chính}
+
+\begin{itemize}
+  \item \textbf{CSPLib prob027} cung cấp luật chơi và các mô hình Essence
+        \cite{csplib027,csplib027models}.
+  \item \textbf{Chlond (2006)} trình bày trực tiếp mô hình IP tối thiểu hóa
+        số click cho Alien Tiles $7\times7$, bốn màu
+        \cite{chlond2006alien}.
+  \item \textbf{Gent, Linton và Smith (2000)} công bố một ma trận click
+        $4\times4$, $c=3$ có tổng 10; target suy ra từ ma trận này được dùng
+        như một instance cố định trong bộ dữ liệu
+        \cite{gent2000symmetry,csplib027results}.
+\end{itemize}
+
+Trang \emph{Data files} của CSPLib hiện không liệt kê file instance nào
+\cite{csplib027data}. Vì vậy các file JSON trong dự án là bộ dữ liệu thực
+nghiệm đi kèm, không phải bộ dữ liệu chính thức của CSPLib.
+
+\subsection{Mục tiêu thiết kế benchmark}
+
+Một bộ benchmark dùng cho khóa luận cần đáp ứng đồng thời bốn yêu cầu:
+
+\begin{enumerate}
+  \item có instance chắc chắn có lời giải để đo khả năng tối ưu hóa;
+  \item có target không bị ép phải có lời giải, nhờ đó vẫn đánh giá được
+        khả năng phát hiện UNSAT;
+  \item phủ nhiều giá trị $N$, $c$ và nhiều mức độ thưa/dày;
+  \item có thể sinh lại đúng từng byte từ cấu hình và seed đã công bố.
+\end{enumerate}
+
+\begin{notebox}[Điểm dễ gắn nhãn sai]
+Nếu target được sinh từ ma trận click $X^{\mathrm w}$ có tổng $U$, ta chỉ
+biết optimum không vượt quá $U$. Có thể tồn tại ma trận click khác có tổng
+nhỏ hơn. Vì vậy generator ghi \texttt{known\_upper\_bound = U}, không ghi
+\texttt{known\_optimum = U}.
+\end{notebox}
+
+\subsection{Hai họ instance bổ sung nhau}
+
+\subsubsection{Họ witness: có lời giải theo cách xây dựng}
+
+Với mỗi bộ tham số $(N,c,\rho)$, đặt
+\[
+  s=\max\!\left(1,\operatorname{round}(\rho N^2)\right).
+\]
+Generator chọn đều $s$ ô khác nhau. Tại mỗi ô được chọn, số click được lấy
+đều trong $\{1,\ldots,c-1\}$; các ô còn lại bằng 0. Ma trận nhận được gọi
+là witness $X^{\mathrm w}$. Target được tính theo đúng luật chơi:
+\begin{equation}\label{eq:data-witness}
+  T_{rk}=\left(
+    \sum_j x^{\mathrm w}_{rj}
+    +\sum_i x^{\mathrm w}_{ik}
+    -x^{\mathrm w}_{rk}
+  \right)\bmod c.
+\end{equation}
+
+Instance này chắc chắn khả thi vì $X^{\mathrm w}$ tạo ra $T$. Tham số
+$\rho$ điều khiển tỷ lệ ô click khác 0 trong witness, chứ không trực tiếp
+điều khiển độ thưa của target.
+
+\subsubsection{Họ uniform-target: chưa biết SAT hay UNSAT}
+
+Mỗi phần tử target được lấy độc lập và đều:
+\begin{equation}\label{eq:data-uniform}
+  T_{ij}\sim\operatorname{Uniform}\{0,1,\ldots,c-1\}.
+\end{equation}
+Generator không tạo witness và gắn trạng thái
+\texttt{unclassified}. Sau đó solver chính xác mới phân loại instance thành
+OPTIMAL, UNSAT hoặc TIMEOUT.
+
+\begin{table}[H]
+\centering
+\caption{Vai trò của hai họ instance.}
+\label{tab:data-families}
+\begin{tabularx}{\textwidth}{@{}l X X@{}}
+\toprule
+\textbf{Họ} & \textbf{Biết ngay khi sinh} & \textbf{Dùng để đánh giá} \\
+\midrule
+Witness
+& Có lời giải; tổng click của witness là upper bound
+& Khả năng tìm và chứng minh nghiệm tối ưu trên các mật độ click khác nhau \\
+Uniform-target
+& Chỉ biết target hợp lệ về định dạng
+& Cả tối ưu hóa trên instance khả thi và phát hiện instance không có lời giải \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Chỉ dùng họ witness sẽ làm bộ dữ liệu lệch hoàn toàn về phía instance khả
+thi. Chỉ dùng họ uniform-target lại không bảo đảm có đủ instance khả thi ở
+từng cấu hình. Hai họ vì vậy phải được giữ riêng trong báo cáo kết quả.
+
+\subsection{Phân tầng easy, medium và hard}
+
+Kích thước mô hình tăng đồng thời theo $N$ và $c$. Generator dùng chỉ số
+cấu trúc
+\begin{equation}\label{eq:structural-score}
+  B(N,c)=N^2(c-1).
+\end{equation}
+Đây chính là số biến đóng góp đơn vị $u_{ijh}$ dùng để đếm tổng click trong
+mô hình SAT ở \cref{eq:unit-sum}. Generator sắp xếp tất cả các cặp $(N,c)$
+theo $B$, sau đó chia danh sách thành ba phần bằng nhau. Với cấu hình mặc
+định, sáu cặp thuộc mỗi nhóm như sau:
+
+\begin{table}[H]
+\centering
+\caption{Phân nhóm theo kích thước cấu trúc $B=N^2(c-1)$.}
+\label{tab:size-tiers}
+\begin{tabularx}{\textwidth}{@{}l X l@{}}
+\toprule
+\textbf{Nhóm} & \textbf{Các cặp $(N,c)$ theo thứ tự tăng của $B$}
+& \textbf{Khoảng $B$} \\
+\midrule
+Easy
+& $(4,2),(5,2),(4,3),(6,2),(4,4),(5,3)$
+& $16$--$50$ \\
+Medium
+& $(8,2),(6,3),(5,4),(10,2),(6,4),(8,3)$
+& $64$--$128$ \\
+Hard
+& $(12,2),(8,4),(10,3),(12,3),(10,4),(12,4)$
+& $144$--$432$ \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{notebox}[Cách hiểu đúng nhãn độ khó]
+Easy, medium và hard ở đây là nhãn \emph{kích thước cấu trúc}, được xác định
+trước khi chạy solver. Runtime thực tế còn phụ thuộc target, optimum và trạng
+thái SAT/UNSAT. Sau thực nghiệm có thể bổ sung
+\texttt{observed\_difficulty}, nhưng không thay đổi nhãn cấu trúc ban đầu.
+\end{notebox}
+
+Cấu hình benchmark đầy đủ là:
+
+\begin{table}[H]
+\centering
+\caption{Cấu hình benchmark khuyến nghị cho thực nghiệm chính.}
+\label{tab:data-config}
+\begin{tabularx}{\textwidth}{@{}l X l@{}}
+\toprule
+\textbf{Thành phần} & \textbf{Cách lấy mẫu} & \textbf{Số instance} \\
+\midrule
+Witness cơ sở
+& Một instance cho mỗi $(N,c,\rho)$, với
+$N\in\{4,5,6,8,10,12\}$, $c\in\{2,3,4\}$ và
+$\rho\in\{0.10,0.30,0.60\}$
+& 54 \\
+Witness bổ sung
+& Hai instance thêm cho mỗi nhóm độ khó; mật độ được luân phiên
+& 6 \\
+Uniform-target
+& Hai instance cho mỗi nhóm độ khó; giá trị $c$ được luân phiên
+& 6 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Phần witness trước hết phủ toàn bộ các tổ hợp $(N,c,\rho)$:
+\[
+  6\times3\times3=54.
+\]
+Sáu witness bổ sung làm tổng witness bằng 60. Sáu uniform-target được chia
+đều hai instance cho mỗi nhóm. Tổng kích thước benchmark là
+\[
+  60+6=66.
+\]
+Mỗi nhóm easy, medium và hard có 20 witness và 2 uniform-target, tức 22
+instance. Cách phân bổ này giữ được độ phủ của witness nhưng tránh tạo hàng
+trăm file gần giống nhau.
+
+Để việc sinh dữ liệu không phụ thuộc thứ tự vòng lặp, mỗi instance dùng một
+seed 64-bit riêng:
+\[
+  \operatorname{seed}_{\I}
+  =\operatorname{first64}\!\left(
+  \operatorname{SHA256}(S,N,c,\text{họ},\rho,r,a)\right),
+\]
+trong đó $S$ là master seed, $r$ là số thứ tự lặp và $a$ là số lần thử lại
+khi gặp target trùng. Target được nhận diện bằng SHA-256 của bộ $(N,c,T)$.
+Nếu hash đã xuất hiện trong bộ dữ liệu thì generator tăng $a$ và sinh lại.
+Các phép lấy mẫu tiếp theo dùng bộ sinh counter-mode SHA-256 do dự án cài
+đặt, vì vậy kết quả không phụ thuộc vào thay đổi nội bộ của
+\texttt{random.Random} giữa các phiên bản Python.
+
+\subsection{Nhãn và quy trình sinh}
+
+Mỗi instance đi qua các bước sau:
+
+\begin{enumerate}
+  \item đọc một tầng $(N,c,\text{họ},\rho,r)$ và tính
+        $B=N^2(c-1)$;
+  \item dẫn xuất instance seed từ master seed;
+  \item sinh witness hoặc sinh trực tiếp target;
+  \item tính target, thống kê tần suất màu và hash;
+  \item loại target trùng trong cùng bộ benchmark;
+  \item kiểm tra kích thước, miền giá trị và kiểm tra lại witness;
+  \item ghi JSON, \texttt{manifest.csv} và
+        \texttt{dataset\_summary.json}.
+\end{enumerate}
+
+Quy tắc gắn nhãn được cố định như sau:
+
+\begin{itemize}
+  \item witness: \texttt{feasible\_by\_construction} và có
+        \texttt{known\_upper\_bound};
+  \item uniform-target: \texttt{unclassified};
+  \item solver tìm được lời giải $K$ click nhưng chưa chứng minh tối ưu:
+        chỉ cập nhật upper bound;
+  \item solver chứng minh tối ưu: mới ghi \texttt{known\_optimum = K};
+  \item solver chứng minh vô nghiệm: ghi \texttt{known\_status = UNSAT};
+  \item hết thời gian: ghi TIMEOUT, không được đổi thành UNSAT.
+\end{itemize}
+
+\subsection{Triển khai trong dự án}
+
+Generator chỉ dùng thư viện chuẩn Python và từ chối ghi đè thư mục đã tồn
+tại. Bộ 66 instance nằm trong \texttt{data/benchmark\_v1} và được sinh bằng:
+
+\begin{lstlisting}[style=jsonstyle,language={}]
+python3 experiments/generate_instances.py \
+  --output-dir data/benchmark_v1 \
+  --sizes 4 5 6 8 10 12 --colours 2 3 4 \
+  --densities 0.10 0.30 0.60 \
+  --witness-count 60 --uniform-count 6 \
+  --master-seed 270027
+\end{lstlisting}
+
+Kiểm tra toàn bộ dataset bằng:
+
+\begin{lstlisting}[style=jsonstyle,language={}]
+python3 experiments/validate_dataset.py data/benchmark_v1
+\end{lstlisting}
+
+Các file được tổ chức theo
+\texttt{size\_tier/family/nNN\_cCC/}. File \texttt{manifest.csv} là chỉ mục dùng
+cho chương trình chạy thực nghiệm; \texttt{dataset\_summary.json} lưu toàn
+bộ cấu hình để có thể tái lập.
+
+\subsection{Các instance kiểm chứng thủ công}
+
+\begin{table}[H]
+\centering
+\caption{Bộ dữ liệu dùng để thử mô hình tối thiểu số click.}
+\label{tab:dataset}
+\footnotesize
+\begin{tabularx}{\textwidth}{@{}>{\ttfamily}l c c X l@{}}
+\toprule
+\normalfont\textbf{File} & $N$ & $c$ &
+\normalfont\textbf{Mô tả} & \normalfont\textbf{Kết quả} \\
+\midrule
+3x3\_c2\_allones.json
+&3&2&Target toàn 1&minimum 3\\
+4x4\_c3\_allones.json
+&4&3&Target toàn 1&minimum 4\\
+4x4\_c3\_easy.json
+&4&3&Ví dụ xuyên suốt ở \cref{sec:example}&minimum 3\\
+4x4\_c3\_infeasible.json
+&4&3&Instance âm để kiểm tra solver&không có lời giải\\
+4x4\_c3\_hardest\_gent2000.json
+&4&3&Target suy ra từ witness đã công bố&minimum 10
+\cite{gent2000symmetry}\\
+7x7\_c4\_solvable.json
+&7&4&Target tự sinh từ witness 6 click&upper bound 6\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Các giá trị minimum 3, 4 và 10 đã được kiểm tra bằng
+\texttt{models/sat\_variant2.py}. Với file $7\times7$, dự án mới gắn nhãn
+upper bound 6; không nên gọi 6 là optimum nếu chưa chứng minh không tồn tại
+lời giải nhỏ hơn.
+
+\subsection{Schema dữ liệu sinh tự động}
+
+Một instance witness sinh tự động có các trường chính sau:
+
+\begin{lstlisting}[style=jsonstyle,language={},caption={Schema JSON rút gọn của một instance witness.}]
+{
+  "schema_version": "2.0",
+  "name": "easy_n04_c03_witness_d100_r000",
+  "N": 4,
+  "c": 3,
+  "target": [[...], [...], [...], [...]],
+  "generation": {
+    "method": "witness",
+    "size_tier": "easy",
+    "structural_score": 32,
+    "master_seed": 270027,
+    "instance_seed": 123456789,
+    "target_sha256": "..."
+  },
+  "guaranteed_solvable": true,
+  "status_at_generation": "feasible_by_construction",
+  "witness_clicks": [[...], [...], [...], [...]],
+  "witness_total_clicks": 5,
+  "known_upper_bound": 5
+}
+\end{lstlisting}
+
+Instance uniform-target không có ba trường witness và upper bound ở cuối.
+Trường \texttt{known\_optimum} cũng không xuất hiện khi sinh; nó chỉ được
+bổ sung sau khi một solver chính xác đã chứng minh giá trị tối ưu.
+
+\clearpage
+\section{Cách chạy mô hình SAT đi kèm}\label{sec:run}
+
+Script tối ưu target cố định là
+\texttt{models/sat\_variant2.py}. Chạy ví dụ xuyên suốt bằng:
+
+\begin{lstlisting}[style=jsonstyle,language={}]
+python3 models/sat_variant2.py \
+  --input data/4x4_c3_easy.json
+\end{lstlisting}
+
+Tham số \texttt{--input-dir} đọc đệ quy các file instance và tự bỏ qua
+\texttt{dataset\_summary.json}. Ví dụ chạy toàn bộ nhóm easy:
+
+\begin{lstlisting}[style=jsonstyle,language={}]
+python3 models/sat_variant2.py \
+  --input-dir data/benchmark_v1/easy
+\end{lstlisting}
+
+Kết quả cần kiểm tra gồm:
+
+\begin{itemize}
+  \item \texttt{Optimal X}: ma trận số lần click;
+  \item \texttt{Minimum total clicks}: giá trị hàm mục tiêu;
+  \item \texttt{Verification: PASSED}: áp dụng lại ma trận click tạo đúng
+        target.
+\end{itemize}
+
+Với instance không có lời giải, script trả về
+\texttt{UNSATISFIABLE}; khi đó không tồn tại giá trị minimum.
+
+\section{Kết luận}\label{sec:conclusion}
+
+Bài toán được nghiên cứu trong tài liệu có một mục tiêu rõ ràng:
+\[
+  \min\sum_{i,j}x_{ij}.
+\]
+Các ràng buộc hàng, cột và modulo bảo đảm ma trận click tạo đúng target.
+Trong ILP, modulo được thay bằng biến thương nguyên $q_{rk}$. Trong SAT,
+ta hỏi lần lượt liệu có lời giải với tổng click không quá $K$ hay không;
+cận $K$ nhỏ nhất trả về SAT chính là optimum.
+
+Ví dụ $4\times4$, $c=3$ cho thấy toàn bộ quá trình: ma trận click có tổng
+3 tạo đúng target, còn các cận 0, 1 và 2 đều UNSAT. Vì vậy minimum bằng 3.
+
+\clearpage
+\bibliographystyle{plainurl}
+\bibliography{references/references}
+
+\end{document}

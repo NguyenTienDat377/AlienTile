@@ -1,0 +1,280 @@
+{
+  "schema_version": "2.0",
+  "name": "hard_n10_c04_witness_d100_r000",
+  "description": "Feasible target derived from a sampled click witness",
+  "N": 10,
+  "c": 4,
+  "target": [
+    [
+      1,
+      0,
+      0,
+      0,
+      2,
+      2,
+      0,
+      1,
+      0,
+      0
+    ],
+    [
+      0,
+      3,
+      2,
+      3,
+      2,
+      1,
+      3,
+      0,
+      0,
+      3
+    ],
+    [
+      0,
+      3,
+      2,
+      3,
+      2,
+      1,
+      3,
+      0,
+      0,
+      3
+    ],
+    [
+      1,
+      3,
+      2,
+      3,
+      1,
+      1,
+      3,
+      0,
+      0,
+      3
+    ],
+    [
+      2,
+      1,
+      0,
+      1,
+      3,
+      3,
+      1,
+      1,
+      2,
+      1
+    ],
+    [
+      1,
+      0,
+      3,
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      0
+    ],
+    [
+      1,
+      2,
+      1,
+      2,
+      0,
+      0,
+      2,
+      3,
+      3,
+      2
+    ],
+    [
+      3,
+      2,
+      1,
+      2,
+      2,
+      0,
+      2,
+      3,
+      3,
+      2
+    ],
+    [
+      1,
+      0,
+      3,
+      0,
+      2,
+      2,
+      0,
+      1,
+      1,
+      0
+    ],
+    [
+      1,
+      0,
+      3,
+      0,
+      2,
+      2,
+      0,
+      1,
+      1,
+      0
+    ]
+  ],
+  "generation": {
+    "generator": "experiments/generate_instances.py",
+    "generator_version": "2.1",
+    "method": "witness",
+    "size_tier": "hard",
+    "structural_score": 300,
+    "replicate": 0,
+    "master_seed": 270027,
+    "instance_seed": 6872910408632311412,
+    "duplicate_attempt": 0,
+    "parameters": {
+      "requested_nonzero_click_fraction": 0.1
+    },
+    "target_sha256": "ff96145fdb4918e4120dd30477ed75fb3e7472bcddddd7319cd8c92678322fde"
+  },
+  "target_statistics": {
+    "nonzero_cells": 68,
+    "nonzero_fraction": 0.68,
+    "histogram": {
+      "0": 32,
+      "1": 24,
+      "2": 22,
+      "3": 22
+    }
+  },
+  "guaranteed_solvable": true,
+  "status_at_generation": "feasible_by_construction",
+  "witness_clicks": [
+    [
+      0,
+      0,
+      3,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      3,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      3,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      3,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      2,
+      2,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      2,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      2,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  ],
+  "witness_total_clicks": 22,
+  "known_upper_bound": 22
+}
