@@ -16,17 +16,27 @@ approaches from Section 7 of the problem specification:
     7.3  MaxSAT / PBO         (partial weighted MaxSAT)
 
 Usage:
-    python c_color.py <instance.json> [approach]
-    approach: 'binary' | 'linear' | 'incremental' | 'maxsat' | 'all' (default)
+    python c_color.py --input <instance.json> [options]
+    python c_color.py --input-dir <directory>  [options]
+    python c_color.py <instance.json> [approach] [sym] [out.xlsx]   (legacy form)
+
+Options:
+    --approach {binary,linear,incremental,maxsat,all}   default: all
+    --sym          enable symmetry-breaking constraints (Section 5.4)
+    --xlsx PATH    Excel output file (default: sat.xlsx)
+    --timeout SEC  per-approach wall-clock limit (default: 600)
 
 Examples:
-    python c_color.py data/4x4_c3_easy.json
-    python c_color.py data/4x4_c3_easy.json binary
-    python c_color.py data/4x4_c3_easy.json all
+    python c_color.py --input data/4x4_c3_easy.json
+    python c_color.py --input data/4x4_c3_easy.json --approach binary
+    python c_color.py --input-dir prob027/data/benchmark_v1/easy/witness/n04_c02
 """
 
+import argparse
+import glob
 import json
 import math
+import os
 import sys
 import time
 from multiprocessing import Process, Queue
@@ -46,6 +56,41 @@ def load_instance(path: str):
     with open(path) as f:
         data = json.load(f)
     return data["N"], data["c"], data["target"]
+
+
+def find_instance_files(dirpath: str) -> list[str]:
+    """
+    Collect instance JSON files under `dirpath`, recursively.
+
+    Mirrors sat_variant1.load_instances_from_dir: the benchmark tree mixes
+    real instances with dataset-level metadata files (manifests, summaries),
+    so membership is decided by *shape* rather than by filename — a file is an
+    instance iff it carries all three of N, c and target. That keeps the walk
+    robust when new metadata files are added to the benchmark later.
+
+    An explicit isdir() check comes first because glob() on a nonexistent path
+    silently returns [], which would otherwise surface as the misleading
+    "no instances found" instead of "you gave me a bad path".
+    """
+    if not os.path.isdir(dirpath):
+        print(f"Not a directory: {dirpath}")
+        sys.exit(1)
+
+    files = sorted(glob.glob(os.path.join(dirpath, "**", "*.json"), recursive=True))
+    instances = []
+    for filepath in files:
+        try:
+            with open(filepath) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue  # not our concern — skip unreadable/malformed side files
+        if isinstance(data, dict) and all(k in data for k in ("N", "c", "target")):
+            instances.append(filepath)
+
+    if not instances:
+        print(f"No instance .json files (with N/c/target) found in {dirpath}")
+        sys.exit(1)
+    return instances
 
 
 def print_board(board, title="Board"):
@@ -457,7 +502,6 @@ def export_to_excel(instance_name, approach_results, xlsx_path="sat.xlsx"):
     approach_results: list of (sheet_name, matrix, opt, elapsed, num_vars, num_clauses) tuples
     Appends a new row to each sheet if the workbook already exists.
     """
-    import os
     if os.path.exists(xlsx_path):
         wb = openpyxl.load_workbook(xlsx_path)
     else:
@@ -561,6 +605,9 @@ def approach_71_binary(N, c, target, symmetry_breaking=False):
     elapsed = time.perf_counter() - t_start
     print(f"  Optimal: {opt} clicks  ({calls} SAT calls, {elapsed:.4f}s)")
 
+    ok = verify_solution(N, c, target, matrix)
+    print(f"  Verification: {'PASSED' if ok else 'FAILED'}")
+    print()
     return matrix, opt, enc.top, len(enc.clauses)
 
 
@@ -852,29 +899,28 @@ def _worker(queue, fn, args):
 #  Main
 # ══════════════════════════════════════════════════════════════════════════
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print(f"Usage: python {sys.argv[0]} <instance.json> [approach] [sym] [output.xlsx]")
-        print("  approach: 'binary' | 'linear' | 'incremental' | 'maxsat' | 'all' (default)")
-        print("  sym:      add 'sym' to enable symmetry-breaking constraints (Section 5.4)")
-        sys.exit(1)
+APPROACHES = ("binary", "linear", "incremental", "maxsat", "all")
 
-    path = sys.argv[1]
-    extra = sys.argv[2:]
-    use_sym = "sym" in extra
-    approach = next((a for a in extra if a in ("binary", "linear", "incremental", "maxsat", "all")), "all")
-    xlsx_path = next((a for a in extra if a.endswith(".xlsx")), "sat.xlsx")
 
-    import os
+def solve_instance(path, approach="all", use_sym=False,
+                   xlsx_path="sat.xlsx", timeout=600):
+    """
+    Run the selected optimisation approach(es) on one instance file.
+
+    This is the whole former __main__ body, lifted into a function so that a
+    directory sweep is just a loop over it. Each call writes its own row into
+    the workbook rather than batching: export_to_excel() re-opens and appends,
+    so results for instances already finished survive a crash or a Ctrl-C
+    partway through a long benchmark run — which matters when a single
+    instance can burn the full `timeout` on each of four approaches.
+    """
     instance_name = os.path.splitext(os.path.basename(path))[0]
 
     N, c, target = load_instance(path)
-    print(f"Instance: N={N}, c={c}")
+    print("#" * 60)
+    print(f"Instance: {instance_name}  (N={N}, c={c})")
     print(f"Symmetry breaking: {'ON' if use_sym else 'OFF'}")
     print_board(target, "Target")
-
-    # ── Timeout configuration ──────────────────────────────────────────
-    TIMEOUT_SECONDS = 600  # seconds; change this value to adjust the limit
 
     # Each entry: (sheet_name, matrix, opt, elapsed, num_vars, num_clauses)
     approach_results = []
@@ -884,7 +930,7 @@ if __name__ == "__main__":
         p = Process(target=_worker, args=(queue, fn, args))
         t0 = time.perf_counter()
         p.start()
-        p.join(timeout=TIMEOUT_SECONDS)
+        p.join(timeout=timeout)
 
         if p.is_alive():
             p.kill()
@@ -922,7 +968,7 @@ if __name__ == "__main__":
     # Summary
     if approach == "all" and approach_results:
         print("=" * 60)
-        print("Summary")
+        print(f"Summary — {instance_name}")
         print("=" * 60)
         for sheet_name, matrix, opt, elapsed, _, _ in approach_results:
             status = f"{opt} clicks" if opt is not None else "UNSATISFIABLE"
@@ -930,3 +976,54 @@ if __name__ == "__main__":
         print()
 
     export_to_excel(instance_name, approach_results, xlsx_path)
+
+
+def _parse_args(argv):
+    """
+    Parse the CLI, accepting both the new flag form and the old positional one.
+
+    The legacy form (`c_color.py inst.json binary sym out.xlsx`) is kept alive
+    because existing scripts and notes use it; it is detected by a bare first
+    argument that does not start with '-'. Everything is then normalised onto
+    the argparse Namespace so the rest of main() has a single shape to handle.
+    """
+    if argv and not argv[0].startswith("-"):
+        extra = argv[1:]
+        return argparse.Namespace(
+            input=argv[0],
+            input_dir=None,
+            approach=next((a for a in extra if a in APPROACHES), "all"),
+            sym="sym" in extra,
+            xlsx=next((a for a in extra if a.endswith(".xlsx")), "sat.xlsx"),
+            timeout=600,
+        )
+
+    parser = argparse.ArgumentParser(
+        description="SAT-based optimisation for Alien Tiles (general c >= 2)")
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument("--input", type=str, help="Path to a JSON instance file")
+    src.add_argument("--input-dir", type=str,
+                     help="Directory of JSON instance files (searched recursively)")
+    parser.add_argument("--approach", choices=APPROACHES, default="all",
+                        help="Which optimisation approach to run (default: all)")
+    parser.add_argument("--sym", action="store_true",
+                        help="Enable symmetry-breaking constraints (Section 5.4)")
+    parser.add_argument("--xlsx", type=str, default="sat.xlsx",
+                        help="Excel output file (default: sat.xlsx)")
+    parser.add_argument("--timeout", type=int, default=600,
+                        help="Per-approach wall-clock limit in seconds (default: 600)")
+    return parser.parse_args(argv)
+
+
+if __name__ == "__main__":
+    args = _parse_args(sys.argv[1:])
+
+    paths = [args.input] if args.input else find_instance_files(args.input_dir)
+    if len(paths) > 1:
+        print(f"Found {len(paths)} instances in {args.input_dir}\n")
+
+    for idx, path in enumerate(paths, 1):
+        if len(paths) > 1:
+            print(f"[{idx}/{len(paths)}] {path}")
+        solve_instance(path, approach=args.approach, use_sym=args.sym,
+                       xlsx_path=args.xlsx, timeout=args.timeout)
