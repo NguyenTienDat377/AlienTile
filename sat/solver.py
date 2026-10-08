@@ -151,62 +151,82 @@ def _result(enc: AlienTilesEncoder, X, calls: int) -> common.SolveResult:
                               extra={"SAT Calls": calls})
 
 
+def _tighten_ub(best_X: list[list[int]], solve_at_most) -> list[list[int]]:
+    """UB = min(UB, F0(x)) under F0 ≤ UB; once UB stops falling, linear search on UB - 1."""
+    UB, strict = _total_clicks(best_X), False
+    common.report({"Total Clicks": UB, "_best_X": best_X})
+    while UB > 0:                                   # LB = 0
+        X = solve_at_most(UB - 1 if strict else UB)
+        if X is None:
+            break                                   # UNSAT at UB - 1: UB is optimal
+        if _total_clicks(X) < UB:
+            best_X, UB = X, _total_clicks(X)
+            common.report({"Total Clicks": UB, "_best_X": best_X})
+        else:
+            strict = True                           # UB không đổi -> linear search
+    return best_X
+
+
+def _bound_literals(enc: AlienTilesEncoder, UB: int) -> tuple[list[int], list[list[int]]]:
+    """U[k] means F0 ≤ k (k = 0..UB), and the clauses tying U to the unit literals."""
+    with ITotalizer(enc.unit_lits, ubound=UB, top_id=enc.pool.top) as itot:
+        U = [-r for r in itot.rhs]                  # rhs[k] is forced once k+1 unit literals are true
+        clauses = itot.cnf.clauses + [[-U[k], U[k + 1]] for k in range(len(U) - 1)]  # U_k -> U_k+1
+    return U, clauses
+
+
 def solve_pure_sat(N: int, c: int, target: list[list[int]],
                    seed: int | None = None) -> common.SolveResult:
-    """Pure SAT, Cách 1: a fresh solver per step, each bounded by UB - 1."""
+    """Pure SAT, Cách 1: a new solver for every call, F0 ≤ K added as clauses."""
     enc = _built_encoder(N, c, target)
-    rng = random.Random(seed) if seed is not None else None
-    d_vars = [enc._click_var(i, j, v)
-              for i in range(N) for j in range(N) for v in range(c)]
+    calls = 0
 
-    best_X, calls = None, 0
-    K = len(enc.unit_lits)                 # first call: no bound
-    while K >= 0:
+    def solve_at_most(K, rng=None):
+        nonlocal calls
         with _solver_for_bound(enc, K) as solver:
-            if rng is not None:
-                solver.set_phases([v if rng.random() < 0.5 else -v for v in d_vars])
+            if rng is not None:                     # randomize: a random phase for every variable
+                solver.set_phases([v if rng.random() < 0.5 else -v
+                                   for v in range(1, solver.nof_vars() + 1)])
             calls += 1
             common.report({"SAT Calls": calls})
-            if not solver.solve():
-                break
-            best_X = enc.decode(set(solver.get_model()))
-        common.report({"Total Clicks": _total_clicks(best_X), "_best_X": best_X})
-        K = _total_clicks(best_X) - 1
+            return enc.decode(set(solver.get_model())) if solver.solve() else None
 
+    best_X = solve_at_most(len(enc.unit_lits))      # x <- model(SAT(F1))
+    if best_X is not None:
+        rng = random.Random(seed) if seed is not None else None
+        best_X = _tighten_ub(best_X, lambda K: solve_at_most(K, rng))
     return _result(enc, best_X, calls)
 
 
 def solve_incremental(N: int, c: int, target: list[list[int]]) -> common.SolveResult:
-    """Incremental SAT, Cách 1: one solver, the bound passed as assumption U_K."""
+    """Incremental SAT, Cách 1: one solver, F0 ≤ K passed as the assumption U_K."""
     enc = _built_encoder(N, c, target)
 
     with Glucose4(bootstrap_with=enc.clauses.clauses) as solver:
         calls = 1
         common.report({"SAT Calls": calls})
-        if not solver.solve():
+        if not solver.solve():                      # x <- model(SAT(F1))
             return _result(enc, None, calls)
         best_X = enc.decode(set(solver.get_model()))
-        UB = _total_clicks(best_X)
-        common.report({"Total Clicks": UB, "_best_X": best_X})
+        U, clauses = _bound_literals(enc, _total_clicks(best_X))
+        solver.append_formula(clauses)
 
-        # U_k = -rhs[k], since rhs[k] is forced once k+1 unit literals are true.
-        with ITotalizer(enc.unit_lits, ubound=UB, top_id=enc.pool.top) as itot:
-            solver.append_formula(itot.cnf.clauses)
-            K = UB - 1
-            while K >= 0:
-                calls += 1
-                common.report({"SAT Calls": calls})
-                if not solver.solve(assumptions=[-itot.rhs[K]]):
-                    break
-                best_X = enc.decode(set(solver.get_model()))
-                common.report({"Total Clicks": _total_clicks(best_X), "_best_X": best_X})
-                K = _total_clicks(best_X) - 1
+        def solve_at_most(K):
+            nonlocal calls
+            calls += 1
+            common.report({"SAT Calls": calls})
+            # No U_K exists for K = N²(c-1): F0 ≤ K always holds.
+            if not solver.solve(assumptions=[U[K]] if K < len(U) else []):
+                return None
+            return enc.decode(set(solver.get_model()))
+
+        best_X = _tighten_ub(best_X, solve_at_most)
 
     return _result(enc, best_X, calls)
 
 
 def solve_maxsat(N: int, c: int, target: list[list[int]]) -> common.SolveResult:
-    """MaxSAT: hard = Φ, soft = U_0 … U_UB, solved by RC2."""
+    """MaxSAT: hard = F1 + U clauses, soft = [U_0 … U_UB], solved by RC2."""
     enc = _built_encoder(N, c, target)
 
     with Glucose4(bootstrap_with=enc.clauses.clauses) as solver:
@@ -214,16 +234,15 @@ def solve_maxsat(N: int, c: int, target: list[list[int]]) -> common.SolveResult:
         if not solver.solve():
             return _result(enc, None, 1)
         best_X = enc.decode(set(solver.get_model()))
-    UB = _total_clicks(best_X)
-    common.report({"Total Clicks": UB, "_best_X": best_X})
+    common.report({"Total Clicks": _total_clicks(best_X), "_best_X": best_X})
 
-    with ITotalizer(enc.unit_lits, ubound=UB, top_id=enc.pool.top) as itot:
-        wcnf = WCNF()
-        wcnf.extend(enc.clauses.clauses + itot.cnf.clauses)
-        for rhs_k in itot.rhs:
-            wcnf.append([-rhs_k], weight=1)
-        with RC2(wcnf, solver="g4") as rc2:
-            best_X = enc.decode(set(rc2.compute()))
+    U, clauses = _bound_literals(enc, _total_clicks(best_X))
+    wcnf = WCNF()
+    wcnf.extend(enc.clauses.clauses + clauses)
+    for u_k in U:
+        wcnf.append([u_k], weight=1)
+    with RC2(wcnf, solver="g4") as rc2:
+        best_X = enc.decode(set(rc2.compute()))
 
     return _result(enc, best_X, 1)
 
