@@ -21,7 +21,7 @@ CONFIGS=4x4_c2,4x4_c3,4x4_c4,5x5_c2,5x5_c3,5x5_c4,6x6_c2,6x6_c3,6x6_c4,\
 echo "cutoff ${TIMEOUT}s -> $XLSX"
 "$PY" -c "import sys; sys.path.insert(0,'sat'); import common; print('machine:', common.machine_label())"
 
-for MODE in feasibility optimum-binary optimum; do
+for MODE in feasibility optimum-binary optimum pure-sat pure-sat-rand incremental maxsat; do
   echo "===== $MODE ====="
   # --resume adds rows not yet present; --upgrade-timeouts redoes TIMEOUT rows
   # recorded under a smaller cutoff. Together they make this idempotent.
