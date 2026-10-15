@@ -2,17 +2,18 @@
 """
 Solving strategies for Alien Tiles, and the benchmark CLI.
 
-Φ_K = Φ ∧ AtMost({u_ijh}, K); the optimum is the smallest satisfiable K.
+Φ_K = F ∧ AtMost({u_ijh}, K); the optimum is the smallest satisfiable K.
+Modes follow Table 2 of the report: how K is chosen × how long a solver lives.
 
-    python3 sat/solver.py --input-dir data/ --xlsx sat/results.xlsx
-    python3 sat/solver.py --input data/4x4_c3_easy.json
+    python3 sat/solver.py --input-dir prob027/data/benchmark_v1 --xlsx sat/results.xlsx
+    python3 sat/solver.py --input data/4x4_c3_easy.json --mode topdown-new
     python3 sat/solver.py --input-dir data/ --mode feasibility
 """
 
 from __future__ import annotations
 
+import math
 import os
-import random
 import sys
 from functools import partial
 
@@ -49,7 +50,8 @@ def _total_clicks(X: list[list[int]]) -> int:
 
 # Module-level and picklable: run_with_timeout runs these in a spawned child.
 
-def solve_feasibility(N: int, c: int, target: list[list[int]]) -> common.SolveResult:
+def solve_feasibility(N: int, c: int, target: list[list[int]],
+                      witness=None) -> common.SolveResult:
     """Variant 1: is any click matrix reaching `target` possible at all?"""
     enc = AlienTilesEncoder(N, c, target)
     enc.build()
@@ -68,75 +70,6 @@ def solve_feasibility(N: int, c: int, target: list[list[int]]) -> common.SolveRe
                               extra={"SAT Calls": 1})
 
 
-def _solve_optimum(N: int, c: int, target: list[list[int]],
-                   binary: bool) -> common.SolveResult:
-    enc = AlienTilesEncoder(N, c, target)
-    enc.build()
-    stats = {"vars": enc.stats["vars"], "clauses": enc.stats["clauses"]}
-    calls = 0
-    common.report({"Variables": stats["vars"], "Clauses": stats["clauses"],
-                   "SAT Calls": calls})
-
-    # Reported before each solve, so a TIMEOUT row counts the call it died in.
-    def started_call():
-        nonlocal calls
-        calls += 1
-        common.report({"SAT Calls": calls})
-
-    def new_incumbent(X):
-        common.report({"Total Clicks": _total_clicks(X), "_best_X": X})
-
-    # Unbounded call first: settles UNSAT in one call, and its click total is a
-    # real upper bound for the search below.
-    with Glucose4(bootstrap_with=enc.clauses.clauses) as solver:
-        started_call()
-        if not solver.solve():
-            return common.SolveResult(X=None, n_vars=stats["vars"],
-                                      n_clauses=stats["clauses"],
-                                      extra={"SAT Calls": calls})
-        best_X = enc.decode(set(solver.get_model()))
-
-    best_K = _total_clicks(best_X)
-    new_incumbent(best_X)
-
-    if binary:
-        lo, hi = 0, best_K - 1
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            with _solver_for_bound(enc, mid) as solver:
-                started_call()
-                if solver.solve():
-                    best_X = enc.decode(set(solver.get_model()))
-                    best_K = _total_clicks(best_X)
-                    new_incumbent(best_X)
-                    hi = best_K - 1
-                else:
-                    lo = mid + 1
-    else:
-        for K in range(best_K + 1):
-            with _solver_for_bound(enc, K) as solver:
-                started_call()
-                if solver.solve():
-                    best_X = enc.decode(set(solver.get_model()))
-                    best_K = _total_clicks(best_X)
-                    new_incumbent(best_X)
-                    break
-
-    return common.SolveResult(X=best_X, optimum=best_K, n_vars=stats["vars"],
-                              n_clauses=stats["clauses"],
-                              extra={"SAT Calls": calls})
-
-
-def solve_optimum_linear(N: int, c: int, target: list[list[int]]) -> common.SolveResult:
-    """Variant 2, K = 0,1,2,… — the paper's presentation."""
-    return _solve_optimum(N, c, target, binary=False)
-
-
-def solve_optimum_binary(N: int, c: int, target: list[list[int]]) -> common.SolveResult:
-    """Variant 2, binary search — same answer, O(log K) solver calls."""
-    return _solve_optimum(N, c, target, binary=True)
-
-
 def _built_encoder(N: int, c: int, target: list[list[int]]) -> AlienTilesEncoder:
     enc = AlienTilesEncoder(N, c, target)
     enc.build()
@@ -144,27 +77,32 @@ def _built_encoder(N: int, c: int, target: list[list[int]]) -> AlienTilesEncoder
     return enc
 
 
-def _result(enc: AlienTilesEncoder, X, calls: int) -> common.SolveResult:
+def _result(enc: AlienTilesEncoder, X, calls: int, LB: int | None = None) -> common.SolveResult:
+    extra = {"SAT Calls": calls} if LB is None else {"SAT Calls": calls, "LB": LB}
     return common.SolveResult(X=X, optimum=_total_clicks(X) if X else None,
                               n_vars=enc.stats["vars"],
                               n_clauses=enc.stats["clauses"],
-                              extra={"SAT Calls": calls})
+                              extra=extra)
 
 
-def _tighten_ub(best_X: list[list[int]], solve_at_most) -> list[list[int]]:
-    """UB = min(UB, F0(x)) under F0 ≤ UB; once UB stops falling, linear search on UB - 1."""
-    UB, strict = _total_clicks(best_X), False
-    common.report({"Total Clicks": UB, "_best_X": best_X})
-    while UB > 0:                                   # LB = 0
-        X = solve_at_most(UB - 1 if strict else UB)
-        if X is None:
-            break                                   # UNSAT at UB - 1: UB is optimal
-        if _total_clicks(X) < UB:
-            best_X, UB = X, _total_clicks(X)
-            common.report({"Total Clicks": UB, "_best_X": best_X})
-        else:
-            strict = True                           # UB không đổi -> linear search
-    return best_X
+def _calculate_lower_bound(N: int, c: int, target: list[list[int]]):
+    max_t = max(max(row) for row in target) 
+
+    total = sum(sum(row) for row in target)
+
+    L = 2 * N - 1
+
+    LB0 = max(max_t, (total + L - 1) // L)
+
+    g = math.gcd(L, c)
+
+    if (total % g != 0): 
+        return None
+
+    f = LB0
+    while (L * f) % c != total % c:
+        f += 1
+    return f
 
 
 def _bound_literals(enc: AlienTilesEncoder, UB: int) -> tuple[list[int], list[list[int]]]:
@@ -175,93 +113,116 @@ def _bound_literals(enc: AlienTilesEncoder, UB: int) -> tuple[list[int], list[li
     return U, clauses
 
 
-def solve_pure_sat(N: int, c: int, target: list[list[int]],
-                   seed: int | None = None) -> common.SolveResult:
-    """Pure SAT, Cách 1: a new solver for every call, F0 ≤ K added as clauses."""
+def _next_bound(strategy: str, LB: int, UB: int) -> int:
+    """The K to ask next, inside [LB, UB - 1] (5.6)."""
+    if strategy == "linear":
+        return LB                                   # bottom-up
+    if strategy == "binary":
+        return (LB + UB - 1) // 2                   # midpoint
+    return UB - 1                                   # topdown
+
+
+def solve_optimum(N: int, c: int, target: list[list[int]], witness=None,
+                  strategy: str = "binary", incremental: bool = True) -> common.SolveResult:
+    """Minimise clicks. strategy picks K; incremental picks the solver lifecycle (Table 2)."""
     enc = _built_encoder(N, c, target)
     calls = 0
+    LB = _calculate_lower_bound(N, c, target)
+    if LB is None:                                  # (27) has no solution: target infeasible
+        return _result(enc, None, calls)
 
-    def solve_at_most(K, rng=None):
+    solver = Glucose4(bootstrap_with=enc.clauses.clauses) if incremental else None
+    U = []                                          # U[K] means F0 ≤ K; filled once UB is known
+
+    def solve_at_most(K):
         nonlocal calls
-        with _solver_for_bound(enc, K) as solver:
-            if rng is not None:                     # randomize: a random phase for every variable
-                solver.set_phases([v if rng.random() < 0.5 else -v
-                                   for v in range(1, solver.nof_vars() + 1)])
-            calls += 1
-            common.report({"SAT Calls": calls})
-            return enc.decode(set(solver.get_model())) if solver.solve() else None
-
-    best_X = solve_at_most(len(enc.unit_lits))      # x <- model(SAT(F1))
-    if best_X is not None:
-        rng = random.Random(seed) if seed is not None else None
-        best_X = _tighten_ub(best_X, lambda K: solve_at_most(K, rng))
-    return _result(enc, best_X, calls)
-
-
-def solve_incremental(N: int, c: int, target: list[list[int]]) -> common.SolveResult:
-    """Incremental SAT, Cách 1: one solver, F0 ≤ K passed as the assumption U_K."""
-    enc = _built_encoder(N, c, target)
-
-    with Glucose4(bootstrap_with=enc.clauses.clauses) as solver:
-        calls = 1
+        calls += 1
         common.report({"SAT Calls": calls})
-        if not solver.solve():                      # x <- model(SAT(F1))
-            return _result(enc, None, calls)
-        best_X = enc.decode(set(solver.get_model()))
-        U, clauses = _bound_literals(enc, _total_clicks(best_X))
-        solver.append_formula(clauses)
+        if incremental:
+            ok = solver.solve(assumptions=[U[K]] if K < len(U) else [])
+            return enc.decode(set(solver.get_model())) if ok else None
+        with _solver_for_bound(enc, K) as fresh:    # a new solver for every K
+            return enc.decode(set(fresh.get_model())) if fresh.solve() else None
 
-        def solve_at_most(K):
-            nonlocal calls
-            calls += 1
-            common.report({"SAT Calls": calls})
-            # No U_K exists for K = N²(c-1): F0 ≤ K always holds.
-            if not solver.solve(assumptions=[U[K]] if K < len(U) else []):
-                return None
-            return enc.decode(set(solver.get_model()))
+    try:
+        best_X = witness                            # 5.5 #1, already verified by run_instance
+        if best_X is None:
+            best_X = solve_at_most(len(enc.unit_lits))   # 5.5 #2: F alone, no bound
+            if best_X is None:
+                return _result(enc, None, calls)
+        UB = _total_clicks(best_X)
+        assert LB <= UB, f"lower bound {LB} is above a known solution {UB}"
+        common.report({"LB": LB, "Total Clicks": UB, "_best_X": best_X})
 
-        best_X = _tighten_ub(best_X, solve_at_most)
+        if incremental and LB < UB:
+            bound_lits, clauses = _bound_literals(enc, UB - 1)   # totalizer cut at UB - 1 (5.7)
+            U.extend(bound_lits)
+            solver.append_formula(clauses)
 
-    return _result(enc, best_X, calls)
+        while LB < UB:
+            K = _next_bound(strategy, LB, UB)
+            X = solve_at_most(K)
+            if X is None:
+                LB = K + 1                          # nothing costs ≤ K
+                common.report({"LB": LB})
+            else:
+                best_X, UB = X, _total_clicks(X)    # the real cost, which may be below K
+                common.report({"Total Clicks": UB, "_best_X": best_X})
+        return _result(enc, best_X, calls, LB)
+    finally:
+        if solver is not None:
+            solver.delete()
 
 
-def solve_maxsat(N: int, c: int, target: list[list[int]]) -> common.SolveResult:
-    """MaxSAT: hard = F1 + U clauses, soft = [U_0 … U_UB], solved by RC2."""
+def solve_maxsat(N: int, c: int, target: list[list[int]],
+                 witness=None) -> common.SolveResult:
+    """MaxSAT: hard = F + U clauses, soft = [U_LB … U_UB], solved by RC2."""
     enc = _built_encoder(N, c, target)
+    calls = 0
+    LB = _calculate_lower_bound(N, c, target)
+    if LB is None:
+        return _result(enc, None, calls)
 
-    with Glucose4(bootstrap_with=enc.clauses.clauses) as solver:
-        common.report({"SAT Calls": 1})
-        if not solver.solve():
-            return _result(enc, None, 1)
-        best_X = enc.decode(set(solver.get_model()))
-    common.report({"Total Clicks": _total_clicks(best_X), "_best_X": best_X})
+    best_X = witness
+    if best_X is None:
+        with Glucose4(bootstrap_with=enc.clauses.clauses) as solver:
+            calls = 1
+            common.report({"SAT Calls": calls})
+            if not solver.solve():
+                return _result(enc, None, calls)
+            best_X = enc.decode(set(solver.get_model()))
+    UB = _total_clicks(best_X)
+    assert LB <= UB, f"lower bound {LB} is above a known solution {UB}"
+    common.report({"SAT Calls": calls, "LB": LB, "Total Clicks": UB, "_best_X": best_X})
 
-    U, clauses = _bound_literals(enc, _total_clicks(best_X))
-    wcnf = WCNF()
-    wcnf.extend(enc.clauses.clauses + clauses)
-    for u_k in U:
-        wcnf.append([u_k], weight=1)
-    with RC2(wcnf, solver="g4") as rc2:
-        best_X = enc.decode(set(rc2.compute()))
+    if LB < UB:
+        U, clauses = _bound_literals(enc, UB)
+        wcnf = WCNF()
+        wcnf.extend(enc.clauses.clauses + clauses)
+        for u_k in U[LB:UB + 1]:
+            wcnf.append([u_k], weight=1)
+        with RC2(wcnf, solver="g4") as rc2:
+            best_X = enc.decode(set(rc2.compute()))
 
-    return _result(enc, best_X, 1)
+    return _result(enc, best_X, calls, _total_clicks(best_X))
 
 
 MODES = {
-    "optimum": solve_optimum_linear,
-    "optimum-binary": solve_optimum_binary,
     "feasibility": solve_feasibility,
-    "pure-sat": solve_pure_sat,
-    "pure-sat-rand": partial(solve_pure_sat, seed=0),
-    "incremental": solve_incremental,
+    "linear-new": partial(solve_optimum, strategy="linear", incremental=False),
+    "binary-new": partial(solve_optimum, strategy="binary", incremental=False),
+    "topdown-new": partial(solve_optimum, strategy="topdown", incremental=False),
+    "linear-incr": partial(solve_optimum, strategy="linear", incremental=True),
+    "binary-incr": partial(solve_optimum, strategy="binary", incremental=True),
+    "topdown-incr": partial(solve_optimum, strategy="topdown", incremental=True),
     "maxsat": solve_maxsat,
 }
 
 
 def main() -> None:
     parser = common.build_parser("Alien Tiles SAT solver (prob027)")
-    parser.add_argument("--mode", choices=sorted(MODES), default="optimum",
-                        help="optimum: minimise clicks (default); "
+    parser.add_argument("--mode", choices=sorted(MODES), default="binary-incr",
+                        help="binary-incr: the report's main method (default); "
                              "feasibility: any solution will do")
     args = parser.parse_args()
 

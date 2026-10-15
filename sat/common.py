@@ -47,7 +47,9 @@ def load_instance(path: str) -> dict:
     with open(path) as f:
         data = json.load(f)
     name = data.get("name") or os.path.splitext(os.path.basename(path))[0]
-    return {"name": name, "N": data["N"], "c": data["c"], "target": data["target"]}
+    return {"name": name, "N": data["N"], "c": data["c"], "target": data["target"],
+            "known_upper_bound": data.get("known_upper_bound"),
+            "witness": data.get("witness_clicks")}
 
 
 def find_instance_files(dirpath: str) -> list[str]:
@@ -182,11 +184,11 @@ def quiet_reports():
         _quiet -= 1
 
 
-def _worker(solve_fn, N, c, target, conn):
+def _worker(solve_fn, N, c, target, kwargs, conn):
     global _reporter
     _reporter = lambda progress: conn.send(("progress", progress))
     try:
-        conn.send(("ok", solve_fn(N, c, target)))
+        conn.send(("ok", solve_fn(N, c, target, **kwargs)))
     except Exception as exc:                     # noqa: BLE001
         conn.send(("error", repr(exc)))
     finally:
@@ -203,9 +205,10 @@ def _stop(proc: Process) -> None:
         proc.join(5)
 
 
-def run_with_timeout(solve_fn, N, c, target, timeout: float | None):
+def run_with_timeout(solve_fn, N, c, target, timeout: float | None, witness=None):
     """
-    Run solve_fn(N, c, target) under a wall-clock limit.
+    Run solve_fn(N, c, target) under a wall-clock limit; a witness, when given,
+    is passed on as solve_fn(..., witness=witness).
 
     Returns (status, payload, elapsed, progress); status is "ok" | "timeout" |
     "error", and progress is the last partial state the solver sent via report().
@@ -219,15 +222,16 @@ def run_with_timeout(solve_fn, N, c, target, timeout: float | None):
     write end, so a child that dies — even mid-message — surfaces as EOFError
     instead of a read that blocks forever.
     """
+    kwargs = {"witness": witness} if witness is not None else {}
     if timeout is None:
         t0 = time.perf_counter()
         try:
-            return "ok", solve_fn(N, c, target), time.perf_counter() - t0, {}
+            return "ok", solve_fn(N, c, target, **kwargs), time.perf_counter() - t0, {}
         except Exception as exc:                 # noqa: BLE001
             return "error", repr(exc), time.perf_counter() - t0, {}
 
     recv_end, send_end = Pipe(duplex=False)
-    proc = Process(target=_worker, args=(solve_fn, N, c, target, send_end))
+    proc = Process(target=_worker, args=(solve_fn, N, c, target, kwargs, send_end))
     t0 = time.perf_counter()
     deadline = t0 + timeout
     progress: dict = {}
@@ -264,7 +268,7 @@ def run_with_timeout(solve_fn, N, c, target, timeout: float | None):
 # ══════════════════════════════════════════════════════════════════════════
 
 EXCEL_HEADERS = ["Instance", "N", "c", "Variables", "Clauses",
-                 "Runtime (s)", "Timeout (s)", "SAT Calls", "Total Clicks",
+                 "Runtime (s)", "Timeout (s)", "SAT Calls", "LB", "Total Clicks",
                  "Optimal Clicks", "Status", "Machine"]
 
 
@@ -392,8 +396,14 @@ def run_instance(solve_fn, inst: dict, timeout: float | None,
         print(f"Instance: {inst['name']}   (N={N}, c={c})")
         print_board(target, "  Target T")
 
+    # Checked here once, so solvers can trust it as the first incumbent (5.5).
+    witness = inst.get("witness")
+    if witness is not None and not verify_solution(N, c, target, witness):
+        print(f"  Witness of {inst['name']} does not reach the target; ignored.")
+        witness = None
+
     status, payload, elapsed, progress = run_with_timeout(
-        solve_fn, N, c, target, timeout)
+        solve_fn, N, c, target, timeout, witness)
 
     row = {"Instance": inst["name"], "N": N, "c": c,
            "Runtime (s)": round(elapsed, 4),

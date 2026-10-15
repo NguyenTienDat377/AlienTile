@@ -23,7 +23,7 @@ from pysat.solvers import Glucose4
 
 import common
 from encoder import AlienTilesEncoder
-from solver import solve_optimum_binary
+from solver import solve_optimum
 
 HEADERS = ["Config", "N", "c", "Variables", "Clauses", "Max-Min Clicks",
            "Targets Checked", "CEGAR Iterations", "Variant-2 Calls",
@@ -87,7 +87,7 @@ def solve_max_min(N: int, c: int, _unused=None) -> dict:
                 # it actually needs, which is the value being maximised.
                 var2_calls += 1
                 with common.quiet_reports():
-                    res = solve_optimum_binary(N, c, T)
+                    res = solve_optimum(N, c, T, witness=X)
                 checked[key] = res.optimum
                 blocked.append(enc.differs_from(T))
 

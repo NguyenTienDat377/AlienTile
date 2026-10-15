@@ -38,7 +38,6 @@ class AlienTilesEncoder:
 
 
     def _encode_click_var(self) -> None:
-        """One-hot encode x_ij as d_ij0 … d_ij,c-1."""
         for i in range(self.N):
             for j in range(self.N):
                 self._add_exactly_one(
@@ -89,7 +88,6 @@ class AlienTilesEncoder:
 
                     self.unit_lits.append(u)
 
-    # -- Assembly ---------------------------------------------------------
 
     def assert_target(self, target: list[list[int]]) -> None:
         for r in range(self.N):
