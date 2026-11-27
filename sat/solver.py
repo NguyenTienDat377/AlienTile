@@ -29,7 +29,6 @@ from encoder import AlienTilesEncoder
 
 
 def _solver_for_bound(enc: AlienTilesEncoder, K: int) -> Glucose4:
-    """A solver loaded with Φ_K."""
     solver = Glucose4(bootstrap_with=enc.clauses.clauses)
 
     if K < len(enc.unit_lits):        # a bound >= the literal count constrains nothing
@@ -52,7 +51,6 @@ def _total_clicks(X: list[list[int]]) -> int:
 
 def solve_feasibility(N: int, c: int, target: list[list[int]],
                       witness=None) -> common.SolveResult:
-    """Variant 1: is any click matrix reaching `target` possible at all?"""
     enc = AlienTilesEncoder(N, c, target)
     enc.build()
     common.report({"Variables": enc.stats["vars"], "Clauses": enc.stats["clauses"],
@@ -106,7 +104,6 @@ def _calculate_lower_bound(N: int, c: int, target: list[list[int]]):
 
 
 def _bound_literals(enc: AlienTilesEncoder, UB: int) -> tuple[list[int], list[list[int]]]:
-    """U[k] means F0 ≤ k (k = 0..UB), and the clauses tying U to the unit literals."""
     with ITotalizer(enc.unit_lits, ubound=UB, top_id=enc.pool.top) as itot:
         U = [-r for r in itot.rhs]                  # rhs[k] is forced once k+1 unit literals are true
         clauses = itot.cnf.clauses + [[-U[k], U[k + 1]] for k in range(len(U) - 1)]  # U_k -> U_k+1
@@ -114,7 +111,6 @@ def _bound_literals(enc: AlienTilesEncoder, UB: int) -> tuple[list[int], list[li
 
 
 def _next_bound(strategy: str, LB: int, UB: int) -> int:
-    """The K to ask next, inside [LB, UB - 1] (5.6)."""
     if strategy == "linear":
         return LB                                   # bottom-up
     if strategy == "binary":

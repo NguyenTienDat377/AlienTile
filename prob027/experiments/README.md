@@ -34,10 +34,12 @@ The output directory must not already exist. Validate a generated dataset with:
 python3 experiments/validate_dataset.py data/benchmark_v1
 ```
 
-Run the minimisation solver recursively over one tier with:
+The commands in this file run from `prob027/`. To run the minimisation solver
+recursively over one tier, first [set up the environment](../../README.md#setup)
+and activate it, then run:
 
 ```bash
-python3 models/sat_variant2.py --input-dir data/benchmark_v1/easy
+python ../sat/solver.py --input-dir data/benchmark_v1/easy
 ```
 
 The generator writes `manifest.csv`, `dataset_summary.json`, a dataset README,

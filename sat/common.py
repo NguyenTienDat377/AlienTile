@@ -269,7 +269,7 @@ def run_with_timeout(solve_fn, N, c, target, timeout: float | None, witness=None
 
 EXCEL_HEADERS = ["Instance", "N", "c", "Variables", "Clauses",
                  "Runtime (s)", "Timeout (s)", "SAT Calls", "LB", "Total Clicks",
-                 "Optimal Clicks", "Status", "Machine"]
+                 "Optimal Clicks", "Status"]
 
 
 def export_to_excel(rows: list[dict], sheet_name: str, xlsx_path: str = "sat.xlsx",
